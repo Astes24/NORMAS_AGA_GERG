@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+run_log_out.txt
+run_log_err.txt
