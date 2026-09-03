@@ -11,6 +11,41 @@ Este archivo se puede ejecutar solo:
     python -m normas.AGA_10
 
 ===============================================================================
+GUIA DE USO PASO A PASO (leer esto primero si solo queres USAR el modulo)
+===============================================================================
+Copia "NORMAS_AGA_GERG" (sin dependencias binarias). Para Critical Flow
+intenta, en orden: (1) llamada directa a `FlowXpert.xll` si esta disponible
+(solo Windows), (2) porte Python puro (`normas/AGA_10_puro.py`, siempre
+disponible, funciona en cualquier plataforma). El resto de los campos
+(Z/Fpv/Cp/Cv/etc.) SIEMPRE es Python puro.
+
+PASO 1 -- Importar:
+    from normas.AGA_10 import calcular_velocidad_sonido_y_fpv
+
+PASO 2 -- Armar la composicion (ver `normas/AGA_8.py`, `NOMBRES_
+COMPONENTES`, para los 21 nombres validos; fraccion o porcentaje, no hace
+falta que sumen exacto):
+    composicion = {"Metano": 96.5222, "Etano": 1.8186, "Propano": 0.4596,
+                   "Nitrogeno": 0.2595, "CO2": 0.5904}
+
+PASO 3 -- Llamar con T_K (Kelvin) y P_kPa (kilopascal absolutos):
+    resultado = calcular_velocidad_sonido_y_fpv(
+        composicion, T_K=288.15, P_kPa=5000.0, calcular_flujo_critico=True)
+
+PASO 4 -- Leer resultados (37 campos). Los mas usados:
+    resultado["Z_flujo"]; resultado["Fpv"]; resultado["W_m_s"]
+    resultado["critical_flow_factor"]  # solo si calcular_flujo_critico=True
+    resultado["metodo_critical_flow"]  # cual de los 2 caminos se uso de verdad
+
+PASO 5 -- SIEMPRE revisar antes de un uso real/fiscal:
+    resultado["rango_aga10"]["rango_combinado"]       # Normal/Extendido/Fuera de rango
+    resultado["aviso_critical_flow_fuera_de_normal"]  # None si OK
+    resultado["aviso_bug_flowxpert_critical_flow"]    # None si OK (bug conocido Kappa>1.6)
+Si NINGUNO de los 2 caminos puede calcular Critical Flow, la funcion lanza
+`RuntimeError` explicito -- no hay un "plan B" aproximado que devuelva un
+numero silenciosamente.
+
+===============================================================================
 FUENTE Y NIVEL DE CONFIANZA (leer antes de usar en un entregable formal)
 ===============================================================================
 [CERTAIN] Se decompilaron con Ghidra los exports `FlowXpert_AGA10_M` y
@@ -190,6 +225,60 @@ residual). `calcular_velocidad_sonido_y_fpv()` ahora usa el emulador para
 `resolver_flujo_critico()` como fallback automatico si no. Ver docstring
 completo de `normas/_aga10_emulador.py` para el detalle tecnico (struct de
 entrada/salida confirmado campo por campo, PLT/libm necesarios).
+[CERTAIN -- 2026-08-31, NUEVO: "Status"/"Range" REALES de fxAGA10ex_M,
+decompilados directamente (no inferidos del manual)] La pantalla real tiene
+2 salidas que ni `_aga10_xll_directo.py` ni `_aga10_emulador.py` extraen
+(ver seccion "AUDITORIA EXHAUSTIVA 2026-08-29" e "INVESTIGACION DE CAUSA
+RAIZ 2026-08-31" en el docstring de `_aga10_xll_directo.py`): "Status" (0
+Normal/1 Input out of range/2 Calculation error/3 No convergence/4 Mole
+fractions != 1.0) y "Range" (0 Normal/1 Extended/2 Out of Range). Se
+decompilo con Ghidra el wrapper real `FUN_18009daf0` ("AGA10ex_M") y de ahi
+2 funciones que SI se pudieron aislar limpio, sin dependencia de Excel:
+  - `FUN_1800cdf14(double *composicion_22)`: calcula el "Range" POR
+    COMPOSICION -- devuelve 0 (Normal), 1 (Extended) o 2 (Out of Range).
+  - `FUN_1800ce1ec(double T_degC, double P_bar)`: calcula el "Range" POR
+    T/P -- devuelve 0 (dentro) o -3 (fuera), y el llamador fuerza Range=2
+    si esto falla, SIN IMPORTAR el resultado de la composicion (el T/P malo
+    manda).
+Todas las constantes numericas de ambas funciones se extrajeron a BYTES
+CRUDOS con `pefile` (mismo metodo ya usado en la familia API MPMS, Rondas
+8/10) y coinciden, LAS 21, EXACTAS con la tabla oficial de la pagina 16 del
+manual ABB SpiritIT (`fxAGA8_C`, la funcion a la que el propio manual remite
+para AGA-10: "Refer to the fxAGA8 function for details on the actual limit
+values used by this function to set output 'Range'"), incluyendo el detalle
+de que Hexanos+ (n-Hexano...n-Decano) y Agua NO tienen limite Expandido real
+(el binario nunca los chequea mas alla del limite Normal) -- exactamente lo
+que el manual anota como "Limit check is ignored for reason of simplicity".
+Ademas, el limite T/P de `FUN_1800ce1ec` (-129..204 degC, 0..1379 bar(a))
+coincidio BYTE A BYTE con el gate ya decompilado independientemente para
+AGA-8 (`validar_rango_aga8()` en `normas/AGA_8.py`, extraido en una ronda
+anterior de un binario/funcion DISTINTA) -- doble confirmacion cruzada de
+que es el mismo limite real, no una coincidencia de lectura.
+Un hallazgo real NO fabricado (que el manual no deja claro por si solo,
+pero SI el binario decompilado): el chequeo por-componente de "Hexanos+" en
+el binario real es POR COMPONENTE INDIVIDUAL (cada uno <=0.002 por separado)
+y NO por la suma del grupo como sugiere el texto del manual ("Mole fraction
+of Hexanes Plus 0.00..0.002") -- una diferencia real entre lo documentado y
+lo compilado, mas permisiva que una lectura literal del texto.
+Implementado en `validar_rango_aga10()` (mas abajo) -- replica ambas
+funciones tal cual decompiladas, no una aproximacion basada solo en el texto
+del manual. Aplicado retroactivamente a los 12 casos caoticos de la
+auditoria 2026-08-29: 9/12 caen fuera del rango "Normal" (Extendido o Fuera
+de rango) -- los otros 3 ("Default"/"GasRicoCO2"/"GasRicoN2" a
+200 degC/800 bar(a)) siguen siendo "Normal" segun este chequeo real pese al
+caos numerico observado, un residuo HONESTO que no se oculta: 800 bar(a)/
+200 degC esta muy cerca del borde real (1379 bar(a)/204 degC) del rango T/P,
+consistente con la causa raiz ya documentada (mal condicionamiento numerico
+que crece cerca de los bordes del rango de validez, no solo fuera de el).
+No se decompilo el resto de la logica de "Status" (que requeriria tambien
+`FUN_1800d0610`/`FUN_1800c93ac` completos para NOCONV/CALCERR) -- el caso de
+Status=COMPOOR (suma de composicion != 100%) ya esta cubierto en este
+proyecto por `validar_suma_composicion()`/`_revisar_suma_composicion_o_
+avisar()` (normas/AGA_8.py / interfaz_calculo_flujo.py), confirmado con la
+MISMA tolerancia real encontrada aqui (constantes DAT_180193f00/08 =
+0.9999/1.0001 para fraccion, DAT_1801942b0/b8 = 99.99/100.01 para
+porcentaje -- FUN_1800c93ac acepta AMBAS convenciones).
+
 [CERTAIN, 2026-08-03] Se agregaron 7 offsets individuales mas (Oxigeno,
 Argon, Helio, Hidrogeno, CO, Agua, H2S), motivados por un caso real con
 "Dry Air" (78% N2/21% O2/0.9% Ar) que mostro ~6% de error en Entalpia/
@@ -391,6 +480,123 @@ def _cstar_real(kappa: float, Z: float) -> float:
     return _cstar_ideal(kappa) / math.sqrt(Z)
 
 
+def validar_rango_aga10(composicion: dict, T_K: float, P_kPa: float) -> dict:
+    """Replica el "Range"/"Status" real de la pantalla "AGA-10 (extended)"
+    (`fxAGA10ex_M`) -- ver seccion "[CERTAIN -- 2026-08-31, NUEVO...]" del
+    docstring del modulo para la evidencia completa de decompilacion
+    (Ghidra, `FUN_1800cdf14`/`FUN_1800ce1ec` de FlowXpert.xll, constantes
+    confirmadas byte a byte con pefile). NO es una aproximacion basada solo
+    en el texto del manual -- es la logica real decompilada, que ademas
+    coincide 21/21 constantes con la tabla de la pagina 16 del manual ABB
+    SpiritIT (`fxAGA8_C`) a la que el propio manual de AGA-10 remite.
+
+    Mismo patron que `validar_rango_aga8()` (normas/AGA_8.py): informativo,
+    NO bloqueante -- la app real tampoco bloquea el calculo por "Range" malo
+    (solo lo marca), asi que esta funcion nunca levanta excepcion por rango,
+    solo informa. Devuelve dict con:
+      valido_entrada: True si T/P caen dentro del CAMPO DE ENTRADA propio de
+          AGA-10 (0..2000 bar(a), -200..+400 degC -- paginas 9/10 del
+          manual, MAS AMPLIO que el rango T/P de abajo). Informativo.
+      rango_composicion: "Normal" / "Extendido" / "Fuera de rango (Expandido)"
+          -- por fraccion molar de cada componente (o grupo), igual que
+          `FUN_1800cdf14`.
+      rango_pt: "Dentro de rango" / "Fuera de rango (T/P)" -- T en
+          [-129,204] degC Y P en [0,1379] bar(a) (igual que `FUN_1800ce1ec`,
+          BYTE-EXACTO con el gate ya usado en `validar_rango_aga8()`).
+      rango_combinado: peor de los 2 anteriores ("Normal"/"Extendido"/
+          "Fuera de rango") -- replica que un T/P malo FUERZA "Fuera de
+          rango" sin importar la composicion, tal cual hace el binario real.
+      mensaje: resumen legible.
+    """
+    total = sum(composicion.values())
+    if total <= 0:
+        raise ValueError("La composicion no puede sumar cero.")
+    f = {nombre: composicion.get(nombre, 0.0) / total for nombre in NOMBRES_COMPONENTES}
+
+    T_C = T_K - 273.15
+    P_bar = P_kPa / 100.0
+
+    # --- Campo de entrada propio de AGA-10 (paginas 9/10 del manual) --
+    # MAS AMPLIO que el rango T/P de "Range" de abajo. Solo informativo
+    # (no se decompilo el chequeo exacto que produce Status=1/FIOOR).
+    valido_entrada = (-200.0 <= T_C <= 400.0) and (0.0 <= P_bar <= 2000.0)
+
+    # --- Rango T/P para "Range" (FUN_1800ce1ec, decompilado) ---
+    pt_normal = (-129.0 <= T_C <= 204.0) and (0.0 <= P_bar <= 1379.0)
+
+    # --- Rango por composicion (FUN_1800cdf14, decompilado) ---
+    butanos = f["Isobutano"] + f["n-Butano"]
+    pentanos = f["Isopentano"] + f["n-Pentano"]
+
+    fuera_de_normal = (
+        not (0.45 <= f["Metano"] <= 1.0)
+        or f["Etano"] > 0.10
+        or f["Propano"] > 0.04
+        or butanos > 0.01
+        or pentanos > 0.003
+        # [CERTAIN, decompilado] Hexanos+ se chequea POR COMPONENTE
+        # INDIVIDUAL (no la suma del grupo, pese a como lo redacta el
+        # manual) -- ver nota del docstring del modulo.
+        or f["n-Hexano"] > 0.002 or f["n-Heptano"] > 0.002 or f["n-Octano"] > 0.002
+        or f["n-Nonano"] > 0.002 or f["n-Decano"] > 0.002
+        or f["CO"] > 0.03
+        or f["CO2"] > 0.30
+        or f["Nitrogeno"] > 0.50
+        or f["Helio"] > 0.002
+        or f["Argon"] > 0.0    # Normal exige Argon EXACTAMENTE 0
+        or f["Oxigeno"] > 0.0  # Normal exige Oxigeno EXACTAMENTE 0
+        or f["H2S"] > 0.0002
+        or f["Hidrogeno"] > 0.10
+        or f["Agua"] > 0.0005
+    )
+
+    dentro_de_expandido = (
+        f["Metano"] <= 1.0 and f["Nitrogeno"] <= 1.0 and f["CO2"] <= 1.0
+        and f["Etano"] <= 1.0 and f["Propano"] <= 0.12
+        and butanos <= 0.06 and pentanos <= 0.04
+        and f["Helio"] <= 0.03 and f["Hidrogeno"] <= 1.0 and f["CO"] <= 0.03
+        and f["Argon"] <= 0.01
+        and f["Oxigeno"] <= 0.21
+        and f["H2S"] <= 1.0
+        # [CERTAIN, decompilado] Hexanos+ y Agua NO tienen limite Expandido
+        # real en el binario -- "Limit check is ignored for reason of
+        # simplicity" (manual, pagina 16), confirmado en `FUN_1800cdf14`:
+        # nunca se leen mas alla del chequeo Normal de arriba.
+    )
+
+    if not dentro_de_expandido:
+        clas_composicion = "Fuera de rango (Expandido)"
+    elif fuera_de_normal:
+        clas_composicion = "Extendido"
+    else:
+        clas_composicion = "Normal"
+
+    clas_pt = "Dentro de rango" if pt_normal else "Fuera de rango (T/P)"
+
+    # --- Combinado: un T/P fuera de rango FUERZA "Fuera de rango" sin
+    # importar la composicion (igual que el binario real). ---
+    if clas_composicion == "Fuera de rango (Expandido)" or not pt_normal:
+        rango_combinado = "Fuera de rango"
+    elif clas_composicion == "Extendido":
+        rango_combinado = "Extendido"
+    else:
+        rango_combinado = "Normal"
+
+    mensaje = f"Composicion: {clas_composicion}. T/P: {clas_pt}. Range combinado: {rango_combinado}."
+    if not valido_entrada:
+        mensaje += (" ADEMAS, T/P esta fuera del campo de entrada propio de AGA-10 "
+                    "(0..2000 bar(a), -200..+400 degC) -- la app real probablemente "
+                    "ni siquiera aceptaria esta entrada (Status='Input argument out of range').")
+
+    return {
+        "valido_entrada": valido_entrada,
+        "rango_composicion": clas_composicion,
+        "rango_pt": clas_pt,
+        "rango_combinado": rango_combinado,
+        "mensaje": mensaje,
+    }
+
+
 def resolver_flujo_critico(T0_K: float, P0_kPa: float, x: list, max_iter: int = 60,
                             calcular_main: bool = True):
     """Resuelve el punto sonico real (garganta de tobera) para el gas de
@@ -528,11 +734,31 @@ def resolver_flujo_critico(T0_K: float, P0_kPa: float, x: list, max_iter: int = 
 def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
                                       Tb_K: float = TB_DEFAULT_K, Pb_kPa: float = PB_DEFAULT_KPA,
                                       calcular_flujo_critico: bool = False):
-    """Devuelve W (velocidad del sonido, m/s), Fpv = sqrt(Zb/Zf), densidades
+    """FUNCION PRINCIPAL -- ver "GUIA DE USO PASO A PASO" al inicio del
+    archivo para un ejemplo completo.
+
+    Parametros:
+        composicion: dict {nombre_componente: fraccion_o_porcentaje}, los
+            21 nombres de `NOMBRES_COMPONENTES` en `normas/AGA_8.py`.
+        T_K / P_kPa: temperatura (Kelvin) y presion (kPa absolutos) de
+            FLUJO.
+        Tb_K / Pb_kPa: temperatura/presion BASE/referencia (defaults:
+            288.7056 K / 101.325 kPa) -- solo importan para `Fpv`.
+        calcular_flujo_critico: bool, default False. En True activa el
+            solver de `critical_flow_factor` (mas lento, intenta 2 caminos
+            en cascada -- ver GUIA DE USO).
+
+    Devuelve W (velocidad del sonido, m/s), Fpv = sqrt(Zb/Zf), densidades
     relativas (ideal y real) y propiedades termicas (Cp, Cv, Kappa) usando
     el motor AGA8-DETAIL ya confirmado. Validado contra caso real -- ver
     docstring del modulo."""
     x = _composicion_a_x(composicion)
+
+    # [CERTAIN, 2026-08-31] "Range" real de fxAGA10ex_M -- ver
+    # validar_rango_aga10() y la seccion nueva del docstring del modulo.
+    # Informativo, NO bloqueante (viaja siempre con el resultado, igual que
+    # aviso_bug_flowxpert_critical_flow).
+    rango_aga10 = validar_rango_aga10(composicion, T_K, P_kPa)
 
     Df, ierr_f, _ = DensityDetail(T_K, P_kPa, x)
     prop_flujo = PropertiesDetail(T_K, Df, x)
@@ -602,11 +828,116 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         _cf = resolver_flujo_critico(T_K, P_kPa, x, calcular_main=False)
         isentropic_ideal_Cstar = _cf["Cstar_ideal"]
         isentropic_real_Cstar = _cf["Cstar_real"]
+        # [CERTAIN, 2026-08-26, AMPLIADO 2026-08-29] Camino PRIMARIO:
+        # llamada DIRECTA (ctypes, sin Excel, SIN emulador de CPU) al
+        # nucleo real dentro de FlowXpert.xll (ver
+        # normas/_aga10_xll_directo.py) -- MISMO algoritmo/binario logico
+        # que el emulador Unicorn del .so de Android, confirmado exacto
+        # contra los 4 casos reales de test_aga10_caso_real.py, y desde
+        # 2026-08-29 tambien confirmado en un BARRIDO AUTOMATIZADO de 109
+        # combinaciones independientes de composicion/T/P contra el propio
+        # emulador Unicorn (97/109 exactas, <1e-12% tipico) -- ver la
+        # seccion "AUDITORIA EXHAUSTIVA 2026-08-29" en el docstring de
+        # `_aga10_xll_directo.py` para el detalle completo. Este ya NO es
+        # solo "el camino rapido con un respaldo por si acaso": dentro de
+        # cualquier condicion real de medicion de gas (aprox. hasta
+        # 100degC/200bar(a) para mezclas, y todo el rango normal para
+        # componentes puros) la equivalencia con Unicorn quedo confirmada
+        # mas alla de duda razonable, ademas de ~500-1000x mas rapido
+        # (1-2 ms vs ~11-15 segundos por llamada). Las UNICAS discrepancias
+        # reales encontradas (12/109, ver la auditoria) caen en
+        # composiciones/T/P muy por fuera de cualquier operacion real
+        # (componentes puros muy fuera del 'Expanded Range' de AGA-8, o
+        # P/T en el borde literal 2000bar(a)/-200/+400degC del campo de
+        # entrada) -- el emulador Unicorn se mantiene intacto, ya NO como
+        # simple red de seguridad "por si la llamada directa falla en
+        # alguna maquina", sino tambien como herramienta de auditoria/
+        # segunda opinion para cualquier caso futuro que un usuario
+        # reporte cerca de esos bordes. La decision de eliminarlo por
+        # completo del proyecto sigue siendo del usuario, no se asume
+        # aqui -- pero la evidencia para hacerlo con confianza, dentro del
+        # rango real de uso, ya existe.
+        _real = None
+        _errores = []
         try:
-            from . import _aga10_emulador as _a10e
-            _slots = _a10e._composicion_a_slots(composicion)
-            _real = _a10e.calcular_aga10_extended_real(_slots, P_kPa * 1000.0, T_K,
-                                                        Pb_kPa * 1000.0, Tb_K)
+            from . import _aga10_xll_directo as _a10x
+            if _a10x.disponible():
+                _slots0 = _a10x._composicion_a_slots0(composicion)
+                _real = _a10x.calcular_aga10_crit_directo(_slots0, P_kPa * 1000.0, T_K)
+                metodo_critical_flow = "xll_directo_exacto"
+        except Exception as _err_xll:
+            _errores.append(f"xll_directo: {_err_xll!r}")
+            _real = None
+
+        # [CERTAIN, 2026-08-31, NUEVO] Camino intermedio: porte a Python
+        # PURO del solver `AGA10::crit` (`normas/_aga10_puro_python.py`),
+        # sin depender de ningun binario/emulador -- solo usa AGA8-DETAIL
+        # ya portado (este mismo modulo/`normas/AGA_8.py`). Se intenta
+        # DESPUES de `.xll` directo y ANTES de Unicorn, NO primero, por
+        # decision EXPLICITA basada en el barrido de validacion (ver
+        # docstring de `_aga10_puro_python.py` y
+        # `normas/_sweep_aga10_puro_python.py`): dentro del rango REAL de
+        # medicion de gas (mezclas tipicas hasta ~100degC/200bar(a)) el
+        # porte coincide 32/32 (100%) contra el oraculo `.xll directo`;
+        # ampliando a cualquier condicion "Normal" segun `validar_rango_
+        # aga10()` (incluye componentes puros y T/P menos tipicos) baja a
+        # 18/21 (85.7%) -- los 3 residuos son EXACTAMENTE los mismos 3
+        # casos (Default/GasRicoCO2/GasRicoN2 a 200degC/800bar(a)) que ya
+        # se documentaron como "Normal segun el chequeo pero caoticos en la
+        # practica" en la seccion "[CERTAIN -- 2026-08-31, NUEVO...]" de
+        # arriba. Fuera de "Normal" (ej. componentes puros pesados a
+        # 300degC/500bar, ya fuera del 'Expanded Range' oficial) el porte
+        # puede no converger (NaN explicito, nunca un numero fabricado) --
+        # tasa de exito mucho menor ahi (`.xll` directo, que ejecuta el
+        # binario real, es estrictamente mas confiable en esa zona porque
+        # no tiene una capa adicional de metodo numerico propio). Por eso
+        # NO se pone primero pese a no necesitar el `.xll` -- el propio
+        # criterio pedido ("no ponerlo primero si tiene mas fallos que el
+        # camino directo") ya decide el orden.
+        _cff_puro = None
+        if _real is None:
+            try:
+                from . import _aga10_puro_python as _a10p
+                _res_puro = _a10p.calcular_critical_flow_factor_puro(x, T_K, P_kPa)
+                if _res_puro["convergio"]:
+                    _cff = _res_puro["critical_flow_factor"]
+                    if _cff == _cff:  # descarta NaN explicito sin importar 'convergio'
+                        _cff_puro = _cff
+                        metodo_critical_flow = "puro_python_newton"
+                if _cff_puro is None:
+                    _errores.append(f"puro_python: no convergio (rango_aga10={rango_aga10['rango_combinado']!r})")
+            except Exception as _err_puro:
+                _errores.append(f"puro_python: {_err_puro!r}")
+                _cff_puro = None
+
+        if _real is None and _cff_puro is None:
+            # [CERTAIN, 2026-09-02 -- copia "NORMAS_AGA_GERG" (GitHub),
+            # pedido explicito del usuario: "elimina las emulaciones"] Esta
+            # copia del proyecto, pensada para despliegue sin dependencias
+            # (web/Linux), NO incluye el respaldo via emulador Unicorn
+            # (`_aga10_emulador.py`, requiere `pip install unicorn` + el
+            # binario `.so` de Android) -- ese archivo fue retirado de este
+            # repositorio a proposito. Solo quedan los 2 caminos que no
+            # dependen de esa libreria: llamada directa a `FlowXpert.xll`
+            # (opcional, solo funciona en Windows con el archivo presente) y
+            # el porte Python puro (`_aga10_puro_python.py`, sin ninguna
+            # dependencia binaria, funciona en cualquier plataforma). Si
+            # ninguno de los 2 funciona para una entrada dada, se falla de
+            # forma explicita en vez de devolver un numero que podria estar
+            # mal sin que se note (misma filosofia de diseño que el proyecto
+            # ya tenia antes de este cambio, ver commit_no_preguntar en la
+            # memoria del proyecto principal).
+            raise RuntimeError(
+                "No se pudo ejecutar el algoritmo real de Critical Flow por "
+                "ninguno de los 2 caminos disponibles en esta copia sin "
+                "dependencias (llamada directa a FlowXpert.xll, o porte "
+                "Python puro validado). El emulador Unicorn fue retirado "
+                "deliberadamente de este repositorio. Por diseño, este "
+                "sistema NO usa una formula aproximada de respaldo para "
+                "este campo. Detalle: " + " | ".join(_errores)
+            )
+
+        if _real is not None:
             critical_flow_factor = _real["critical_flow_factor"]
             # Exactos (ver nota arriba) -- sobreescriben el offset empirico.
             H0_kJ_kg = _real["H0_kJ_kg"]
@@ -615,37 +946,13 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
             Cp0_kJ_kgC = _real["Cp0_kJ_kgC"]
             Cp_kJ_kgC = _real["Cp_kJ_kgC"]
             Cv_kJ_kgC = _real["Cv_kJ_kgC"]
-            # [CERTAIN, 2026-08-04] Indicador explicito de que metodo se usó
-            # de verdad -- antes de esto, si el emulador fallaba (falta
-            # unicorn/.so en la maquina), el resultado caia en silencio al
-            # respaldo aproximado sin ninguna senal visible. Ver
-            # interfaz_calculo_flujo.py (aviso en la GUI cuando esto no es
-            # "emulador_exacto").
-            metodo_critical_flow = "emulador_exacto"
-        except Exception as _err_emulador:
-            # [CERTAIN, 2026-08-04 -- CAMBIO DE DISEÑO deliberado, pedido
-            # explicito del usuario] Antes, si faltaba unicorn/el .so o
-            # fallaba la emulacion puntual, este bloque caia en silencio (o
-            # con un aviso facil de ignorar en la GUI) a una formula propia
-            # (NASA TM X-2308, ver docstring del modulo) que puede diferir
-            # hasta ~1% del valor real a presion alta (confirmado 2026-08-04
-            # con datos nuevos, ver memoria del proyecto). El usuario decidio
-            # que NO quiere un "plan B" aproximado disponible para
-            # Critical Flow Factor: si no se puede ejecutar el algoritmo
-            # real (extraido, no reinventado), es mejor fallar de forma
-            # explicita que entregar un numero que podria estar mal sin que
-            # se note. Por eso ahora se levanta un error claro en vez de
-            # calcular con la formula de respaldo -- el llamador (GUI) ya
-            # captura excepciones aca y muestra un dialogo de error.
-            raise RuntimeError(
-                "No se pudo ejecutar el algoritmo real de Critical Flow "
-                "(falta 'unicorn' o el archivo .so de FlowXpert en esta "
-                "maquina, o fallo la emulacion puntual). Por diseño, este "
-                "sistema NO usa una formula aproximada de respaldo para "
-                "este campo -- instale unicorn y copie "
-                "apk_analisis/libFXLibrary.so junto al proyecto para "
-                "habilitar el calculo exacto."
-            ) from _err_emulador
+        else:
+            # Camino puro_python: SOLO calcula critical_flow_factor (reusa
+            # AGA8-DETAIL, no un struct completo del motor real) -- H0/H/S/
+            # Cp0/Cp/Cv se DEJAN con el valor del offset empirico ya
+            # calculado arriba (fast path, <0.006% de error ya validado),
+            # no hay nada mejor que sobreescribirlos aqui.
+            critical_flow_factor = _cff_puro
     else:
         critical_flow_factor = 0.0
         isentropic_ideal_Cstar = 0.0
@@ -667,6 +974,54 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         "confirmado que da un Critical Flow Factor sin sentido fisico (~87-89) en este rango. "
         "critical_flow_factor replica ese bug tal cual (no es un valor confiable)."
         if calcular_flujo_critico and prop_flujo["Kappa"] > 1.6 else None
+    )
+
+    # [CERTAIN, 2026-08-31] Aviso de "solver caotico" para critical_flow_factor
+    # fuera de "Normal" -- ver seccion "VALIDACION CONTRA APP REAL 2026-08-31"
+    # en el docstring de _aga10_xll_directo.py. Se probaron los 12 casos
+    # exactos donde el camino directo .xll y el emulador Unicorn discrepaban
+    # entre si, DIRECTO contra el proceso real de FlowXpert (Frida, sin tocar
+    # la UI). Resultado: en TODOS los campos de estado (Z_flujo, Kappa, Mm, W,
+    # H/S/Cp/Cv) el camino directo .xll coincidio con la app real casi bit a
+    # bit en los 12/12 casos -- confirmando que .xll_directo (ya el camino
+    # PRIMARIO, ver mas arriba) es el que hay que preferir, nunca Unicorn (que
+    # dio critical_flow_factor=0.0 en 11/12 casos frente a un numero real no
+    # nulo de la app, y Z_flujo/Kappa muy distintos incluso en el caso restante).
+    # PERO especificamente critical_flow_factor (el ultimo campo que calcula
+    # el solver iterativo, tras ~100 iteraciones de secante anidado) SI
+    # diverge de forma real entre .xll y la app en 2 de esos 12 casos (hasta
+    # ~35% de diferencia relativa: extremo:Default@15C/2000bar(a) y
+    # extremo:Metano puro@15C/2000bar(a)) pese a que Z_flujo/Kappa coincidian
+    # casi exactos -- el mismo mal condicionamiento numerico ya documentado
+    # (perturbaciones del orden del ULP se amplifican tras el solver) afecta
+    # tambien a xll-vs-app-real, no solo a xll-vs-Unicorn. [CORREGIDO,
+    # 2026-08-31, misma fecha: una 3ra ronda de verificacion encontro que un
+    # 4to caso que parecia divergir igual de fuerte (DryAir@200C/800bar(a),
+    # ~80%) en realidad era un artefacto de la prueba, NO una divergencia
+    # real -- la composicion usada en el hook de Frida sumaba 1.0001 en vez
+    # de 1.0 exacto (sin renormalizar, a diferencia de esta funcion que
+    # siempre renormaliza via `_composicion_a_slots0`); repitiendo la llamada
+    # con la MISMA composicion sin normalizar, el camino directo SI reproduce
+    # la app real a 7e-6% (ruido puro). Ver seccion "CORRECCION 2026-08-31"
+    # en el docstring de `normas/_aga10_xll_directo.py` para el detalle
+    # completo y reproducible.] Este aviso es honesto sobre la limitacion
+    # real que SI queda (2 casos, no se puede "arreglar" sin recompilar):
+    # fuera de "Normal", critical_flow_factor especificamente puede no ser
+    # literalmente exacto a la app aun usando el camino preferido, aunque
+    # siga siendo la mejor aproximacion disponible (mucho mejor que Unicorn,
+    # que en el mismo barrido NUNCA coincidio con la app en estos 12 casos).
+    aviso_critical_flow_fuera_de_normal = (
+        f"Composicion/T/P fuera de 'Normal' (rango_aga10.rango_combinado="
+        f"{rango_aga10['rango_combinado']!r}). Z_flujo/Kappa/W/H/S/Cp/Cv "
+        "siguen siendo confiables (validado <0.0001% contra la app real vía "
+        "Frida en 12 casos extremos, 2026-08-31), pero critical_flow_factor "
+        "(Critical Flow C*) puede diverger de la app real hasta ~35% en esta "
+        "zona (2 de los 12 casos probados) por mal condicionamiento numerico "
+        "real del solver iterativo -- no es un bug de este software, es el "
+        "mismo comportamiento caotico que tiene FlowXpert mismo aqui. Ver "
+        "'VALIDACION CONTRA APP REAL 2026-08-31' y su 'CORRECCION 2026-08-31' "
+        "en normas/_aga10_xll_directo.py."
+        if calcular_flujo_critico and rango_aga10["rango_combinado"] != "Normal" else None
     )
 
     return {
@@ -702,9 +1057,11 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         "isentropic_ideal_Cstar": isentropic_ideal_Cstar,
         "isentropic_real_Cstar": isentropic_real_Cstar,
         "aviso_bug_flowxpert_critical_flow": aviso_bug_flowxpert_critical_flow,
+        "aviso_critical_flow_fuera_de_normal": aviso_critical_flow_fuera_de_normal,
         "metodo_critical_flow": metodo_critical_flow,
         "ierr_flujo": ierr_f,
         "ierr_base": ierr_b,
+        "rango_aga10": rango_aga10,
     }
 
 

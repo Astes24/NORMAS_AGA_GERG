@@ -1,1 +1,15 @@
-unicorn==2.1.4
+# El motor de calculo (AGA_10.py/AGA_10_puro.py, NX_19.py/NX_19_puro.py,
+# AGA_8.py, GERG_*.py, etc.) es 100% Python puro -- no requiere NINGUN
+# paquete externo para funcionar (solo libreria estandar: math, dataclasses,
+# typing). El emulador Unicorn se retiro de este repositorio (2026-09-02).
+#
+# pefile es OPCIONAL: solo hace falta si se quiere usar el camino de
+# desarrollo "llamada directa a FlowXpert.xll" (_aga10_xll_directo.py /
+# _nx19_xll_directo.py), que ademas solo funciona en Windows con el archivo
+# FlowXpert.xll presente. Si no esta instalado o el .xll no esta disponible,
+# el sistema usa automaticamente el porte Python puro sin ningun cambio de
+# codigo -- ver AGA_10.py/NX_19.py.
+pefile==2024.8.26
+
+# tkinter (interfaz_calculo_flujo.py) viene incluido con la instalacion
+# estandar de Python en la mayoria de plataformas -- no se instala con pip.

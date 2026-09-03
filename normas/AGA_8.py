@@ -150,6 +150,57 @@ aga8_ranges_full.c` (dispatcher ya ubicado en check_aga8_temp_press_ranges_
 2017 @ 0x000e6200, llama in-order a within_range_a/b/c hasta que alguna
 acepte).
 ===============================================================================
+RIESGO DE SWAP i-Butano/n-Butano o i-Pentano/n-Pentano (investigado 2026-08-06)
+===============================================================================
+[CERTAIN] Se investigo si las tablas de constantes de este archivo (MM, Ei,
+Ki, Gi) tienen el mismo tipo de bug que se encontro y corrigio en
+`normas/ISO_6976.py` (valores de i-Butano/n-Butano e i-Pentano/n-Pentano
+intercambiados entre filas, posible porque ambos pares de isomeros comparten
+masa molar exacta - 58.123 g/mol y 72.15 g/mol respectivamente - y son
+faciles de cruzar mal si una tabla se verifica solo por masa molar).
+Conclusion: NO se encontro swap. Evidencia:
+
+  1. Metodo de extraccion distinto al de ISO_6976.py: estas tablas se
+     copiaron literal de las declaraciones DATA/BLOCK DATA de DETAIL.FOR
+     (archivo de texto de NIST con el orden de los 21 componentes
+     documentado explicitamente en el propio codigo fuente, ver linea
+     49-53 arriba), no se reconstruyeron cruzando por masa molar contra
+     otra fuente. El vector de error que causo el bug en ISO_6976.py no
+     aplica aqui de la misma forma.
+  2. Consistencia fisica independiente en los indices 6/7 (Isobutano/
+     n-Butano) y 8/9 (Isopentano/n-Pentano): Gi (parametro de
+     orientacion/forma) es MAYOR para el isomero normal (cadena recta)
+     que para el ramificado en AMBOS pares: Gi(nC4)=0.281835 >
+     Gi(iC4)=0.256692 y Gi(nC5)=0.366911 > Gi(iC5)=0.332267, consistente
+     con que la ramificacion reduce la no-esfericidad de la molecula.
+     Ei (ligado a la temperatura critica) tambien es MAYOR para el
+     isomero normal en ambos pares (Tc real: n-Butano 425.1 K >
+     i-Butano 407.8 K; n-Pentano 469.7 K > i-Pentano 460.4 K), igual que
+     Ei(nC4)=337.6389 > Ei(iC4)=324.0689 y Ei(nC5)=370.6823 >
+     Ei(iC5)=365.5999. Ki (ligado al volumen critico), en cambio,
+     INVIERTE el orden entre los dos pares: Ki(iC4)=0.6406937 >
+     Ki(nC4)=0.6341423, pero Ki(iC5)=0.6738577 < Ki(nC5)=0.6798307 -
+     esto coincide exactamente con el volumen critico REAL publicado
+     (Vc: i-Butano ~262.7 cm3/mol > n-Butano ~255.0 cm3/mol, pero
+     i-Pentano ~306 cm3/mol < n-Pentano ~311 cm3/mol). Que la tabla
+     reproduzca esta inversion de orden, que no es intuitiva y no seria
+     el resultado tipico de un swap accidental (un swap accidental
+     tenderia a invertir el mismo par de columnas en la misma direccion
+     para ambos pares), es evidencia fuerte de que los valores son
+     correctos, no cruzados.
+  3. Validacion numerica contra el dataset oficial de NIST (ver
+     `normas/test_gerg2008_aga8_nist_testdata.py`, composicion "Gas#2"):
+     esa composicion real tiene Isobutano=0.00197% y n-Butano=0.00068%
+     (proporcion ~2.9:1, asimetrica - a diferencia del caso real usado
+     originalmente en ISO_6976.py, que tenia muy poca fraccion de estos
+     componentes y por eso el swap no se noto ahi). Los resultados de
+     `PropertiesDetail` para esa composicion coinciden con P, Cv, Cp y W
+     publicados por NIST dentro de 0.05%; si Ei/Ki/Gi de los indices 6/7
+     (iC4/nC4) estuvieran intercambiados, esta composicion asimetrica
+     habria mostrado una diferencia mucho mayor. La misma composicion usa
+     Isopentano=0.00156% (n-Pentano=0 en ese caso especifico) y tambien
+     coincide, validando el indice 8 (iC5) de forma aislada.
+===============================================================================
 """
 
 import math
