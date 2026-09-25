@@ -118,6 +118,37 @@ docstring de `calcular_flash` en GERG_2008.py para el detalle completo.
 anterior, la rama de 2 fases de `calcular_flash()` (metodo estandar, Wilson
 + Rachford-Rice + sustitucion sucesiva) se ELIMINO por completo: la funcion
 ahora siempre devuelve un resultado monofasico, igual que la app real.
+
+===============================================================================
+"neo-Pentane Mode" -- IMPORTANTE: "Neglect" NO se comporta igual que en
+GERG-2008 (unica diferencia real encontrada entre ambas pantallas)
+===============================================================================
+[CERTAIN -- RONDA 56, 2026-09-16] Se confirmo en vivo (AVD `flowxpert_rd`,
+composicion "Default", neo-Pentano=0.008, P=100 bar(a)/T=25 degC) que "Add
+to iC5" y "Add to nC5" dan resultados IDENTICOS entre "GERG-2004 Gas"/
+"GERG-2004 Flash" y "GERG-2008 Gas"/"GERG-2008 Flash" (coincide con que
+comparten el mismo motor real, ver docstring de GERG_2008.py). SIN EMBARGO
+"Neglect" especificamente NO coincide:
+    GERG-2004 Gas:   real Z=0.865392, Density=86.84751 kg/m3,
+                      Speed of Sound=415.5746 m/s, Isentropic Exp.=1.499876.
+    GERG-2008 Gas (MISMA composicion/T/P, MISMO caso):
+                      real Z=0.865283, Density=86.86535 kg/m3,
+                      Speed of Sound=415.5392 m/s, Isentropic Exp.=1.499929.
+La diferencia es real y reproducible (confirmado tambien en las pantallas
+"Flash" de ambas, mismos valores que sus "Gas" respectivos). GERG-2004
+"Neglect" deja intencionalmente un hueco en la suma de fracciones molares
+(no renormaliza sobre el total restante), mientras GERG-2008 "Neglect" SI
+renormaliza sobre el total restante (igual que AGA8-DETAIL/AGA-10, ver
+`normas/AGA_8.py`). Por eso `calcular_propiedades_gas`/`calcular_flash` de
+este archivo (que son alias directos de GERG_2008.py, sin logica propia)
+DEBEN recibir la composicion ya plegada con
+`GERG_2008.aplicar_modo_neo_pentano_gerg()` (NO con
+`AGA_8.aplicar_modo_neo_pentano()`, que es la que usan GERG-2008 Gas/Flash y
+AGA8 GERG) -- `interfaz_calculo_flujo.py` ya llama a la funcion correcta por
+pantalla. Esta es la UNICA diferencia de comportamiento real encontrada
+entre "GERG-2004" y "GERG-2008" en toda la investigacion de este proyecto
+(la relacion de "alias fino"/mismo motor sigue siendo correcta para todo lo
+demas: Gas vs Flash, Add to iC5, Add to nC5, formulas, coeficientes).
 ===============================================================================
 """
 

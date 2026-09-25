@@ -253,14 +253,46 @@ def aplicar_modo_neo_pentano(composicion_21: dict, neo_pentano: float,
                               modo: str = "Add to iC5") -> dict:
     """Pliega neo-Pentano dentro de una composicion de 21 componentes segun
     el modo real de la app ('neo-Pentane Mode'). No modifica el dict de
-    entrada (devuelve uno nuevo)."""
+    entrada (devuelve uno nuevo). Usada por AGA-8 (DETAIL) y AGA-10 (que
+    importa esta MISMA funcion, ver `AGA_10.py`) -- NO por la familia GERG,
+    ver nota [CERTAIN -- RONDA 56] abajo.
+
+    [CERTAIN -- RONDA 56, 2026-09-16] En modo "Neglect", esta funcion
+    devuelve el dict SIN neo-Pentano, dejando que el consumidor
+    (`_composicion_a_x`) renormalice sobre el total de los 13-14 componentes
+    RESTANTES (`total = sum(composicion.values())`, que excluye a
+    neo-Pentano por construccion). Esto se confirmo CORRECTO especificamente
+    para AGA8-DETAIL/AGA-10 contra AVD real (`flowxpert_rd`, composicion
+    "Default" P=1.01325 bar(a)/T=0 degC, neo-Pentano=0.008, pantalla
+    "AGA-10 (extended)"): real Molar Mass=18.63314, Flowing/Base
+    Density=0.833203 kg/m3 -- coincide EXACTO (a 5 decimales) con la
+    prediccion de este mismo mecanismo (renormalizar sobre 99.992), y NO con
+    la hipotesis alternativa de dividir por el total original de 100 sin
+    renormalizar (esa daria Mm=18.63165/D=0.833136, no coincide).
+
+    [CERTAIN -- RONDA 56, mismo dia] IMPORTANTE: se investigo la MISMA
+    pregunta para las pantallas GERG-2004 Gas/Flash (mismo motor real que
+    GERG-2008, ver `GERG_2008.py`) con la MISMA composicion/T/P (solo
+    P=100 bar(a)/T=25 degC) y el resultado real NO coincide con este
+    mecanismo -- coincide en cambio con NO renormalizar (dividir por el
+    total original de 100, dejando un hueco en la suma de fracciones
+    molares). Es decir, AGA8-DETAIL y GERG-2008/2004 implementan "Neglect"
+    de forma REALMENTE DISTINTA a nivel de motor (no es el mismo mecanismo
+    compartido que "Add to iC5"/"Add to nC5", que si coinciden byte a byte
+    entre ambas familias). Ver `normas/GERG_2008.py`,
+    `aplicar_modo_neo_pentano_gerg()`, para la version correcta usada por
+    toda la familia GERG (GERG-2004 Gas/Flash, GERG-2008 Gas/Flash, AGA8
+    GERG) -- `interfaz_calculo_flujo.py` llama a una funcion distinta segun
+    la pantalla, NO siempre esta. No usar esta funcion (`aplicar_modo_neo_pentano`,
+    la de AGA_8.py) para ninguna pantalla de la familia GERG.
+    """
     comp = dict(composicion_21)
     if modo == "Add to iC5":
         comp["Isopentano"] = comp.get("Isopentano", 0.0) + neo_pentano
     elif modo == "Add to nC5":
         comp["n-Pentano"] = comp.get("n-Pentano", 0.0) + neo_pentano
     elif modo == "Neglect":
-        pass  # se descarta -- _composicion_a_x renormaliza sobre el total restante
+        pass  # se descarta -- _composicion_a_x renormaliza sobre el total restante (CONFIRMADO correcto para AGA8/AGA10, ver docstring arriba)
     else:
         raise ValueError(f"Modo de neo-Pentano desconocido: {modo!r}. Validos: {NEO_PENTANO_MODOS}")
     return comp
@@ -287,8 +319,9 @@ def validar_suma_composicion(composicion_21: dict, neo_pentano: float = 0.0,
                               tolerancia: float = TOLERANCIA_SUMA_COMPOSICION):
     """Replica el chequeo real de FlowXpert ('Composition 100% error'): la
     composicion (ya con neo-Pentano plegado segun su modo -- en 'Neglect'
-    no cuenta, confirmado contra el ensamblador real, ver
-    `aplicar_modo_neo_pentano`) debe sumar ~100. Devuelve (valido, suma)."""
+    no cuenta para esta suma, confirmado contra AVD real para AGA8-DETAIL/
+    AGA-10, ver `aplicar_modo_neo_pentano`) debe sumar ~100. Devuelve
+    (valido, suma)."""
     comp_completa = aplicar_modo_neo_pentano(composicion_21, neo_pentano, modo_neo_pentano)
     suma = sum(comp_completa.values())
     return abs(suma - 100.0) <= tolerancia, suma

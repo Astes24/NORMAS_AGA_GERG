@@ -85,6 +85,25 @@ los 8 valores usados <= cierto umbral, cada valor entre 0 y un maximo) usa
 exactamente los mismos limites documentados aqui en `RANGOS_VALIDACION` --
 estan puestos por sentido comun (0..1 por fraccion molar) pero no se extrajo
 el valor EXACTO del umbral de suma desde el binario.
+
+===============================================================================
+RIESGO DE SWAP i-Butano/n-Butano o i-Pentano/n-Pentano (investigado 2026-08-06)
+===============================================================================
+[CERTAIN] Se investigo si este archivo tiene el mismo tipo de bug que se
+encontro y corrigio en `normas/ISO_6976.py` (valores de i-Butano/n-Butano e
+i-Pentano/n-Pentano intercambiados entre filas de una tabla de constantes,
+posible porque ambos isomeros de cada par comparten masa molar exacta -
+58.123 g/mol y 72.15 g/mol respectivamente - y son faciles de cruzar mal si
+alguien verifica una tabla solo por masa molar). Conclusion: en este archivo
+el bug es IMPOSIBLE de forma estructural, no solo improbable. `COEF_B` y
+`COEF_H` (las unicas tablas de constantes fisicas por componente de este
+modulo) NO tienen fila para "i-Butano", "n-Butano", "i-Pentano" ni
+"n-Pentano": `COMPONENTES_FORMULA` lista solo los 8 gases no-hidrocarburo
+que de verdad participan en la formula real de AGA5_C (ver arriba). Esos 4
+componentes existen en `ORDEN_COMPONENTES_APP` (la app los recibe y los
+valida), pero su efecto sobre el poder calorifico ya esta implicito en SG
+(gravedad especifica, input independiente), no en un coeficiente propio de
+este archivo que se pudiera cruzar por error. No hay tabla que intercambiar.
 ===============================================================================
 """
 

@@ -73,6 +73,26 @@ app "neo-Pentane Mode: Add to iC5"), P=100 bar(a), T=25 degC:
 Los 6 resultados coinciden dentro del redondeo que muestra la app -- mismo
 nivel de rigor que AGA-3 y AGA-5.
 
+[CERTAIN -- RONDA 55, 2026-09-16] Re-confirmacion de "neo-Pentane Mode" para
+las 4 pantallas que usan este motor (AGA8 GERG, GERG-2008 Gas, GERG-2008
+Flash -- todas via `Math_GERG2008_Gas`/`Math_GERG2008_Flash` real, ver
+arriba -- y GERG-2004 Gas/Flash, ver `normas/GERG_2004.py`, alias fino de
+este mismo archivo). Manual oficial (`Flow-X Manual IIIb - Function
+Reference`, fxAGA8_GERG pag. 17, fxGERG2008_Gas pag. 87, fxGERG2008_Flash
+pag. 86) documenta Default "1: Add to i-Pentane" para las 3 funciones con
+tabla propia (fxGERG2004_Gas/_Flash no tienen tabla propia en el manual,
+dice literalmente "available for compatibility reasons only... succeeded
+by function fxGERG2008_Gas/_Flash"). Confirmado en vivo con AVD
+`flowxpert_rd` DESPUES de `pm clear` (reset de fabrica, primera apertura
+real de cada pantalla -- importante: se descubrio esta ronda que FlowXpert
+persiste el ultimo valor usado POR PANTALLA entre sesiones, asi que una
+lectura sin este reset puede ser un valor de prueba viejo, no el default
+real, ver nota completa en `normas/GPA_2172.py`): las 4 pantallas
+(AGA8 GERG, GERG-2008 Gas, GERG-2008 Flash, GERG-2004 Gas, GERG-2004 Flash
+-- 5 en total) muestran "Add to iC5" de fabrica, coincidiendo con el
+manual y con el default compartido de `_build_composicion_grid_con_neo`.
+Sin cambios de codigo necesarios para estas 5 pantallas.
+
 [CERTAIN -- 2026-07-24, validacion adicional contra fuente OFICIAL de NIST,
 no la app] Ver `normas/test_gerg2008_aga8_nist_testdata.py`: coincidencia
 EXACTA (diferencia 0.0, a precision de punto flotante) contra el doctest
@@ -178,6 +198,100 @@ NOMBRES_COMPONENTES = [
     "Isopentano", "n-Pentano", "n-Hexano", "n-Heptano", "n-Octano", "n-Nonano",
     "n-Decano", "Hidrogeno", "Oxigeno", "CO", "Agua", "H2S", "Helio", "Argon",
 ]
+
+# ---------------------------------------------------------------------------
+# neo-Pentano -- "neo-Pentane Mode" (Add to iC5 / Add to nC5 / Neglect), igual
+# selector real de la app que en AGA_8.py (ver docstring de
+# `aplicar_modo_neo_pentano` alla para el detalle de "Add to iC5"/
+# "Add to nC5" -- IDENTICOS aca, confirmado).
+#
+# [CERTAIN -- RONDA 56, 2026-09-16, INVESTIGACION COMPLETA] Se penso al
+# principio de esta ronda que el modo "Neglect" seria un mecanismo distinto
+# COMPARTIDO por las 5 pantallas del motor GERG-2008 (AGA8 GERG, GERG-2008
+# Gas, GERG-2008 Flash, GERG-2004 Gas, GERG-2004 Flash) frente a AGA8-DETAIL/
+# AGA-10 -- ESO ERA INCOMPLETO. Confirmado en vivo (AVD `flowxpert_rd`,
+# composicion "Default", neo-Pentano=0.008, P=100 bar(a)/T=25 degC, LAS 5
+# pantallas probadas con AMBOS modos "Add to nC5" y "Neglect"):
+#   AGA-10 (P=1.01325 bar(a)/T=0 degC), GERG-2008 Gas y GERG-2008 Flash:
+#     real Neglect Z=0.865283 (GERG-2008)/Mm=18.63314 (AGA-10) -- coincide
+#     EXACTO con renormalizar sobre el total de los 13-14 componentes
+#     RESTANTES (excluye neo-Pentano de la suma), el MISMO mecanismo que
+#     `AGA_8.aplicar_modo_neo_pentano` (sin cambios) ya implementaba
+#     correctamente desde antes de esta ronda.
+#   GERG-2004 Gas y GERG-2004 Flash (MISMA composicion/T/P, MISMO Add to
+#   nC5 que si coincide con GERG-2008 en ese modo): real Neglect Z=0.865392,
+#     Density=86.84751 kg/m3 -- NO coincide con renormalizar sobre el
+#     restante (esa hipotesis da Z=0.865283, la de GERG-2008/AGA-10), SI
+#     coincide exacto con la hipotesis alternativa: las fracciones molares
+#     se calculan dividiendo el valor crudo de cada componente por el total
+#     ORIGINAL de 100 (NO 100-neo=99.992), dejando un hueco real en la suma
+#     de fracciones molares (99.992/100=0.99992, no 1.0 exacto).
+# CONCLUSION: pese a que GERG-2004 Gas/Flash y GERG-2008 Gas/Flash llaman al
+# MISMO motor de calculo real (`Math_GERG2008_Gas`/`Math_GERG2008_Flash`,
+# ver docstring del modulo mas arriba, y "Add to iC5"/"Add to nC5" SI dan
+# resultados identicos entre ambas), el modo "Neglect" especificamente SI
+# difiere entre GERG-2004 y GERG-2008 -- son 2 rutinas de "lectura de
+# composicion" distintas en el binario (ya se sabia que GERG2004 usa un
+# selector de tipo propio, DAT_1802f24f0 vs DAT_1802c7340, ver
+# `normas/GERG_2004.py`), y esta ronda confirma que esa diferencia SI tiene
+# consecuencias numericas reales para "Neglect" (la unica de las 3 opciones
+# donde importa como se recalcula el total). AGA8 GERG (wrapper literal de
+# GERG-2008 Gas, confirmado por decompilacion) se comporta como GERG-2008,
+# NO como GERG-2004.
+# Implementacion (solo para GERG-2004 Gas/Flash): se preserva `neo_pentano`
+# bajo `_NEO_PENTANO_NEGLECT_KEY` (nombre reservado, fuera de los 21
+# validos) para que `sum(composicion.values())` -- el patron que usa
+# `_composicion_a_x` de este archivo -- siga dividiendo por el total
+# ORIGINAL (100), sin que la key se confunda con ningun componente real
+# (`_composicion_a_x` solo lee los 21 nombres de `NOMBRES_COMPONENTES` via
+# `.get(nombre, 0.0)`).
+#
+# [CERTAIN -- RONDA 57, 2026-09-16] La conclusion de arriba ("AGA8 GERG se
+# comporta como GERG-2008, NO como GERG-2004") quedaba sin confirmar en vivo
+# para "Neglect" especificamente en la pantalla "AGA8 GERG" (RONDA 56 probo
+# las otras 4 pantallas del grupo -- AGA-10, GERG-2008 Gas/Flash, GERG-2004
+# Gas/Flash -- pero no esta, y se habia dejado como supuesto por analogia de
+# decompilacion). Confirmado en vivo (AVD `flowxpert_rd`, pantalla "AGA8
+# GERG", composicion "Default" (neo-Pentano=0.008), P=100 bar(a), T=25 degC
+# -- MISMO caso real ya documentado arriba para "Add to iC5" (Z=0.865194),
+# ahora con "neo-Pentane Mode: Neglect"):
+#   real Neglect: Z=0.865283, Mass Density=86.86535 kg/m3,
+#   Molar Density=4.661998 kmol/m3, Molar Mass=18.63264 kg/kmol,
+#   Speed of Sound=415.5392 m/s.
+# Coincide EXACTO (dentro del redondeo que muestra la app) con
+# `AGA_8.aplicar_modo_neo_pentano` (Z calculado=0.865283, D_mass=86.865346,
+# D_mol=4.661998, Mm=18.632643, W=415.539204 -- la funcion que YA usa
+# `on_calcular_gerg2008` en `interfaz_calculo_flujo.py`), y NO con
+# `aplicar_modo_neo_pentano_gerg` (esa da Z=0.865392, distinto). Confirma
+# la conclusion de RONDA 56 con evidencia real propia de esta pantalla, no
+# solo por analogia de decompilacion. CERO cambio de codigo necesario: el
+# handler de "AGA8 GERG" ya estaba correcto.
+# ---------------------------------------------------------------------------
+_NEO_PENTANO_NEGLECT_KEY = "__neo_pentano_neglected__"
+
+
+def aplicar_modo_neo_pentano_gerg(composicion_21: dict, neo_pentano: float,
+                                   modo: str = "Add to iC5") -> dict:
+    """Version SOLO para las pantallas 'GERG-2004 Gas' y 'GERG-2004 Flash'
+    (`normas/GERG_2004.py`) de `AGA_8.aplicar_modo_neo_pentano` -- MISMO
+    comportamiento en 'Add to iC5'/'Add to nC5', pero 'Neglect' DISTINTO (no
+    renormaliza sobre el total restante). NO usar para 'AGA8 GERG',
+    'GERG-2008 Gas' ni 'GERG-2008 Flash' -- esas 3 pantallas usan
+    `AGA_8.aplicar_modo_neo_pentano` sin cambios (confirmado real, ver nota
+    arriba). No modifica el dict de entrada."""
+    comp = dict(composicion_21)
+    if modo == "Add to iC5":
+        comp["Isopentano"] = comp.get("Isopentano", 0.0) + neo_pentano
+    elif modo == "Add to nC5":
+        comp["n-Pentano"] = comp.get("n-Pentano", 0.0) + neo_pentano
+    elif modo == "Neglect":
+        if neo_pentano:
+            comp[_NEO_PENTANO_NEGLECT_KEY] = neo_pentano
+    else:
+        raise ValueError(
+            f"Modo de neo-Pentano desconocido: {modo!r}. Validos: (\"Add to iC5\", \"Add to nC5\", \"Neglect\")")
+    return comp
+
 
 R_GERG = 8.314472  # J/(mol-K) -- distinto del R=8.31451 usado en AGA8-DETAIL
 EPSILON = 1.0e-15
@@ -652,7 +766,14 @@ PRESION_MINIMA_CONFIABLE_KPA = 500.0
 
 def _aviso_baja_presion(P_kPa: float):
     if P_kPa < PRESION_MINIMA_CONFIABLE_KPA:
-        return "Presion menor a 0.5 MPa: validado por NIST."
+        return (
+            f"P={P_kPa:.3f} kPa esta por debajo de {PRESION_MINIMA_CONFIABLE_KPA:.0f} kPa "
+            "(0.5 MPa) -- rango donde el calculo REAL de GERG-2004/2008 dentro de "
+            "FlowXpert es erratico (confirmado: 48% de fallo en 570 composiciones "
+            "reales a presion atmosferica). Este resultado esta validado contra la "
+            "fuente publica de NIST (GERG2008.FOR), NO contra FlowXpert, que en este "
+            "rango no produce un numero confiable con el que comparar."
+        )
     return None
 
 

@@ -7,28 +7,24 @@ campos Pressure/Temperature/Specific Gravity/Gross Heating Val./Nitrogen
 Fraction/Carbon dioxide Frac./PTB G9 Correction). Unica funcion de
 produccion: `nx19_fpv_ghv()`, usada por `interfaz_calculo_flujo.py`.
 
-Este archivo se ejecuta como paquete:
+Este archivo se ejecuta como paquete (usa import relativo a `_nx19_emulador`):
     python -m normas.NX_19
-
-[NOTA -- copia "NORMAS_AGA_GERG" (GitHub), 2026-09-02] Esta copia del
-proyecto esta pensada para desplegarse SIN dependencias binarias (web/
-Linux). El emulador Unicorn (`_nx19_emulador.py`) fue retirado a proposito
-de este repositorio -- el camino de respaldo aca es `normas/NX_19_puro.py`
-(100% Python puro, cero dependencias). Ver ese archivo para el detalle
-completo de como se porto y valido cada formula.
 
 ===============================================================================
 GUIA DE USO PASO A PASO (leer esto primero si solo queres USAR el modulo)
 ===============================================================================
-Intenta, en orden: (1) llamada directa a `FlowXpert.xll` si esta disponible
-(solo Windows), (2) porte Python puro (`normas/NX_19_puro.py`, siempre
-disponible).
+Modulo de PRODUCCION (usado por `interfaz_calculo_flujo.py`). Intenta, en
+orden: (1) llamada directa a `FlowXpert.xll` si esta disponible, (2)
+emulador Unicorn. Para una version SIN dependencia de `.xll` ni Unicorn,
+ver `normas/NX_19_puro.py` (misma funcion, mismos parametros, 100% Python
+puro -- ideal para despliegue web).
 
 PASO 1 -- Importar:
     from normas.NX_19 import nx19_fpv_ghv
 
 PASO 2 -- Reunir las 6 entradas (unidades exactas, NO hay conversion
-automatica):
+automatica -- convertir ANTES de llamar si los datos vienen en otra
+unidad):
     p_bar     = 50.0   # Presion ABSOLUTA, bar(a) -- NO manometrica
     t_degc    = 25.0   # Temperatura, grados Celsius
     sg        = 0.6    # Gravedad Especifica (adimensional, aire=1)
@@ -55,13 +51,11 @@ Ejemplo completo:
     ptb_g9=False -> siempre `Z_AGA_nx19` (el GHV nunca se lee)
     ptb_g9=True y GHV < 39.79999923706055 MJ/m3 -> `Z_AGA_nx19_mod`
     ptb_g9=True y GHV >= 39.79999923706055 MJ/m3 -> `Z_AGA_nx19_3H`
-Estas 3 funciones reales se ejecutan aqui, en orden de preferencia, via (1)
-llamada directa al binario `FlowXpert.xll` (`_nx19_xll_directo.py`, solo
-funciona en Windows con el archivo presente) o (2) el porte Python puro
-(`NX_19_puro.py`, funciona en cualquier plataforma) -- no una
-reimplementacion sin validar, sino un porte cuidadoso confirmado contra el
-dispositivo real y contra el boletin publico de ABB Totalflow (metodo
-clasico de 1962).
+Estas 3 funciones reales se ejecutan aqui via emulacion EXACTA de CPU
+(Unicorn sobre `apk_analisis/libFXLibrary.so`, ver `_nx19_emulador.py`), no
+una reimplementacion en Python de sus formulas -- por eso el resultado
+coincide con el dispositivo real a precision de punto flotante, no por
+ajuste/correccion medida.
 
 VALIDACION: 21 casos reales (12 de sesiones anteriores + 9 capturados con
 Frida sobre la app) con error 0.0000%-0.0000455% (promedio 0.0000194%,
@@ -91,10 +85,10 @@ fisicamente absurda (Z>1.1) -- confirmado IDENTICO llamando la app real via
 Frida directo, no es un bug de esta emulacion sino un limite real y
 conocido del metodo.
 
-Lanza RuntimeError si NINGUNO de los 2 caminos disponibles (`.xll` directo,
-porte Python puro) puede ejecutar el algoritmo real -- no hay fallback
-automatico a una formula aproximada (se prefiere fallar fuerte a devolver
-silenciosamente un resultado menos preciso).
+Lanza RuntimeError si el emulador no esta disponible (falta 'unicorn' o
+`apk_analisis/libFXLibrary.so`) -- no hay fallback automatico a una
+formula aproximada (se prefiere fallar fuerte a devolver silenciosamente
+un resultado menos preciso).
 """
 import math
 
@@ -105,7 +99,8 @@ def nx19_fpv_ghv(p_bar: float, t_degc: float, sg: float, ghv_mj_m3: float,
     archivo para un ejemplo completo. Calcula Z y FPV por el metodo NX-19
     "SG + Poder Calorifico + PTB G9" de FlowXpert, ejecutando el algoritmo
     real (`Nx19_Calc`), en orden de preferencia: (1) llamada directa a
-    `FlowXpert.xll`, (2) porte Python puro (`normas/NX_19_puro.py`).
+    `FlowXpert.xll`, (2) emulador Unicorn del `.so` de Android (o, en la
+    copia sin dependencias del repo, el porte Python puro).
 
     Parametros -- TODOS obligatorios salvo `ptb_g9` (unidades EXACTAS, sin
     conversion automatica):
@@ -156,29 +151,22 @@ def nx19_fpv_ghv(p_bar: float, t_degc: float, sg: float, ghv_mj_m3: float,
         r = None
 
     if r is None:
-        # [CERTAIN, 2026-09-02 -- copia "NORMAS_AGA_GERG" (GitHub), pedido
-        # explicito del usuario: "elimina las emulaciones"] Esta copia, para
-        # despliegue sin dependencias (web/Linux), NO incluye el respaldo
-        # via emulador Unicorn (`_nx19_emulador.py`, requiere `pip install
-        # unicorn` + el binario `.so` de Android) -- se retiro de este
-        # repositorio a proposito. En su lugar usa el porte 100% Python
-        # puro (`normas/NX_19_puro.py`, cero dependencias binarias, ya
-        # validado: formula clasica cruzada contra el boletin publico de
-        # ABB Totalflow, 238/238 contra el oraculo `.xll`, y 55/57 casos
-        # reales de dispositivo exactos -- ver docstring de ese archivo).
+        from . import _nx19_emulador as _nx19_emu
         try:
-            from . import NX_19_puro as _n19p
-            r = _n19p.nx19_fpv_ghv(p_bar, t_degc, sg, ghv_mj_m3, n2_frac, co2_frac, ptb_g9)
-            _fuente = r["fuente"]
-        except Exception as _err_puro:
-            _errores.append(f"puro_python: {_err_puro!r}")
+            r = _nx19_emu.calcular_nx19_dispatch_real(
+                p_bar=p_bar, t_degc=t_degc, sg=sg, ghv_mj_m3=ghv_mj_m3,
+                n2_frac=n2_frac, co2_frac=co2_frac, ptb_g9=ptb_g9,
+            )
+            _, nombre_funcion = _nx19_emu._elegir_funcion(ptb_g9, ghv_mj_m3)
+            _fuente = f"Nx19_Calc -> {nombre_funcion} (emulacion real exacta, Unicorn sobre libFXLibrary.so)"
+        except Exception as _err_emulador:
+            _errores.append(f"unicorn: {_err_emulador!r}")
             raise RuntimeError(
                 "No se pudo ejecutar el algoritmo real de NX-19 por NINGUNO "
-                "de los 2 caminos disponibles en esta copia sin dependencias "
-                "(llamada directa a FlowXpert.xll, o porte Python puro "
-                "validado). El emulador Unicorn fue retirado deliberadamente "
-                "de este repositorio. Detalle: " + " | ".join(_errores)
-            ) from _err_puro
+                "de los 2 caminos exactos disponibles (llamada directa a "
+                "FlowXpert.xll ni emulador Unicorn del .so de Android). "
+                "Detalle: " + " | ".join(_errores)
+            ) from _err_emulador
 
     z = r["z"]
     # Guardia adicional (defensiva): si por alguna OTRA combinacion de

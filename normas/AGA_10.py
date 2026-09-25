@@ -13,18 +13,20 @@ Este archivo se puede ejecutar solo:
 ===============================================================================
 GUIA DE USO PASO A PASO (leer esto primero si solo queres USAR el modulo)
 ===============================================================================
-Copia "NORMAS_AGA_GERG" (sin dependencias binarias). Para Critical Flow
-intenta, en orden: (1) llamada directa a `FlowXpert.xll` si esta disponible
-(solo Windows), (2) porte Python puro (`normas/AGA_10_puro.py`, siempre
-disponible, funciona en cualquier plataforma). El resto de los campos
-(Z/Fpv/Cp/Cv/etc.) SIEMPRE es Python puro.
+Este es el modulo de PRODUCCION (usado por `interfaz_calculo_flujo.py`).
+Para Critical Flow intenta, en orden: (1) llamada directa a `FlowXpert.xll`
+si esta disponible, (2) porte Python puro (siempre disponible, ver
+`normas/AGA_10_puro.py` para el detalle de esa formula), (3) emulador
+Unicorn si los 2 anteriores fallan. El resto de los campos (Z/Fpv/Cp/Cv/
+etc.) SIEMPRE es Python puro, sin importar cual camino se use para
+Critical Flow.
 
 PASO 1 -- Importar:
     from normas.AGA_10 import calcular_velocidad_sonido_y_fpv
 
-PASO 2 -- Armar la composicion (ver `normas/AGA_8.py`, `NOMBRES_
-COMPONENTES`, para los 21 nombres validos; fraccion o porcentaje, no hace
-falta que sumen exacto):
+PASO 2 -- Armar la composicion (mismo formato que `AGA_10_puro.py` -- ver
+`normas/AGA_8.py`, `NOMBRES_COMPONENTES`, para los 21 nombres validos;
+fraccion o porcentaje, no hace falta que sumen exacto):
     composicion = {"Metano": 96.5222, "Etano": 1.8186, "Propano": 0.4596,
                    "Nitrogeno": 0.2595, "CO2": 0.5904}
 
@@ -32,16 +34,18 @@ PASO 3 -- Llamar con T_K (Kelvin) y P_kPa (kilopascal absolutos):
     resultado = calcular_velocidad_sonido_y_fpv(
         composicion, T_K=288.15, P_kPa=5000.0, calcular_flujo_critico=True)
 
-PASO 4 -- Leer resultados (37 campos). Los mas usados:
+PASO 4 -- Leer resultados (37 campos -- ver la lista completa en el codigo
+mas abajo, `_build_result_labels`/GUI para los nombres visibles al
+usuario). Los mas usados:
     resultado["Z_flujo"]; resultado["Fpv"]; resultado["W_m_s"]
     resultado["critical_flow_factor"]  # solo si calcular_flujo_critico=True
-    resultado["metodo_critical_flow"]  # cual de los 2 caminos se uso de verdad
+    resultado["metodo_critical_flow"]  # cual de los 3 caminos se uso de verdad
 
 PASO 5 -- SIEMPRE revisar antes de un uso real/fiscal:
     resultado["rango_aga10"]["rango_combinado"]       # Normal/Extendido/Fuera de rango
     resultado["aviso_critical_flow_fuera_de_normal"]  # None si OK
     resultado["aviso_bug_flowxpert_critical_flow"]    # None si OK (bug conocido Kappa>1.6)
-Si NINGUNO de los 2 caminos puede calcular Critical Flow, la funcion lanza
+Si NINGUNO de los 3 caminos puede calcular Critical Flow, la funcion lanza
 `RuntimeError` explicito -- no hay un "plan B" aproximado que devuelva un
 numero silenciosamente.
 
@@ -307,6 +311,62 @@ regresion (Default sigue en 0.00008% de diferencia en S) y con mejora
 real en el caso que motivo esto (Dry Air: S de 62.96% de error a 0.0056%,
 ver `test_aga10_dry_air_mezcla_calculate_slow` en
 `normas/test_aga10_caso_real.py`).
+===============================================================================
+
+RONDA 55 (2026-09-16) -- neo-Pentano: hueco cerrado (antes este docstring no
+mencionaba neo-Pentano en absoluto, pese a que la pestaña GUI de AGA-10 usa
+el mismo selector "neo-Pentane Mode" compartido con AGA-8/GERG). Este
+modulo NO tiene su propia logica de plegado de neo-Pentano: importa
+`_composicion_a_x` DIRECTO de `normas/AGA_8.py` (mismo objeto de funcion,
+no una copia), asi que el manejo de "Neglect" (renormalizacion sobre el
+total restante) es IDENTICO byte a byte al de AGA-8, no solo analogo.
+[CERTAIN] Manual oficial (`Flow-X Manual IIIb - Function Reference`,
+fxAGA10_M pag. 9 y fxAGA10ex_M pag. 10) documenta el campo "neo-Pentane
+mode" con Default "1: Add to i-Pentane" para ambas variantes. [CERTAIN,
+confirmado en vivo 2 veces] AVD `flowxpert_rd`: (a) dump `aga10x.xml`
+preexistente (sesion anterior, pantalla "AGA-10 (extended)") ya mostraba
+"neo-Pentane Mode: Add to iC5"; (b) repetido esta ronda con `pm clear`
+(reset de fabrica, primera apertura real de la pantalla) sobre la MISMA
+pantalla "AGA-10 (extended)": mismo resultado, "Add to iC5" (lectura del
+texto de resumen; la verificacion adicional con `checked="true"` en el
+dropdown real se hizo sobre AGA-8, pantalla hermana con el mismo widget
+compartido, ver `normas/AGA_8.py`, no se repitio aqui por redundancia).
+IMPORTANTE (ver RONDA 55 en `normas/GPA_2172.py`): se descubrio en esta
+misma ronda que FlowXpert persiste el ultimo valor usado POR PANTALLA
+entre sesiones (asi es como una lectura "fresh" de nombre puede en
+realidad ser un valor de prueba viejo) -- por eso el reset con `pm clear`
+antes de leer (b) es el paso que hace esta confirmacion confiable, no solo
+la lectura en si. Default real de pantalla = default compartido de
+`_build_composicion_grid_con_neo` = manual: los 3 coinciden, sin necesitar
+correccion de codigo.
+
+RONDA 56 (2026-09-16) -- "Add to nC5" y "Neglect" confirmados numericamente
+(RONDA 55 solo habia confirmado el DEFAULT "Add to iC5"; los otros 2 modos
+nunca se habian probado contra un caso real de punta a punta en esta
+pantalla). AVD `flowxpert_rd`, composicion "Default", P=1.01325 bar(a),
+T=0 degC (mismo caso base ya validado arriba), neo-Pentano=0.008:
+    Add to iC5 (ya conocido): Mm=18.63742, Density=0.833395 kg/m3.
+    Add to nC5: real Mm=18.63742, Density=0.833395 kg/m3 -- IDENTICO a
+      "Add to iC5" a 5 decimales (esperado: Isopentano y n-Pentano tienen
+      la misma masa molar, 72.15 kg/kmol, asi que mover neo-Pentano de un
+      slot al otro no cambia Mm/Density de forma perceptible al redondeo de
+      la app; SI cambia en campos mas sensibles como W_m_s a partir del 4to
+      decimal, ver `normas/AGA_8.py`/`normas/GERG_2008.py` para la
+      comparacion completa con GERG-2004, que usa la misma composicion).
+    Neglect: real Mm=18.63314, Density=0.833203 kg/m3 -- coincide EXACTO
+      con `aplicar_modo_neo_pentano()` de AGA_8.py SIN CAMBIOS (renormaliza
+      sobre el total de los 13 componentes restantes, excluyendo
+      neo-Pentano de la suma) -- confirma que el mecanismo compartido con
+      AGA-8 (mismo objeto `_composicion_a_x`) tambien es correcto para
+      "Neglect", no solo para "Add to iC5"/"Add to nC5".
+IMPORTANTE (cierra una hipotesis erronea que se penso brevemente durante
+esta misma ronda): "Neglect" NO se comporta igual en AGA-10/AGA8-DETAIL que
+en GERG-2004 Gas/Flash -- GERG-2004 (a diferencia de GERG-2008, que SI
+coincide con AGA-10 en este punto) deja un hueco en la suma de fracciones
+molares en vez de renormalizar. Ver `normas/GERG_2004.py` y
+`normas/GERG_2008.py` (`aplicar_modo_neo_pentano_gerg`) para el detalle
+completo -- NO aplica a este archivo, que sigue usando
+`AGA_8.aplicar_modo_neo_pentano()` sin cambios.
 ===============================================================================
 """
 
@@ -745,7 +805,7 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         Tb_K / Pb_kPa: temperatura/presion BASE/referencia (defaults:
             288.7056 K / 101.325 kPa) -- solo importan para `Fpv`.
         calcular_flujo_critico: bool, default False. En True activa el
-            solver de `critical_flow_factor` (mas lento, intenta 2 caminos
+            solver de `critical_flow_factor` (mas lento, intenta 3 caminos
             en cascada -- ver GUIA DE USO).
 
     Devuelve W (velocidad del sonido, m/s), Fpv = sqrt(Zb/Zf), densidades
@@ -911,31 +971,36 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
                 _cff_puro = None
 
         if _real is None and _cff_puro is None:
-            # [CERTAIN, 2026-09-02 -- copia "NORMAS_AGA_GERG" (GitHub),
-            # pedido explicito del usuario: "elimina las emulaciones"] Esta
-            # copia del proyecto, pensada para despliegue sin dependencias
-            # (web/Linux), NO incluye el respaldo via emulador Unicorn
-            # (`_aga10_emulador.py`, requiere `pip install unicorn` + el
-            # binario `.so` de Android) -- ese archivo fue retirado de este
-            # repositorio a proposito. Solo quedan los 2 caminos que no
-            # dependen de esa libreria: llamada directa a `FlowXpert.xll`
-            # (opcional, solo funciona en Windows con el archivo presente) y
-            # el porte Python puro (`_aga10_puro_python.py`, sin ninguna
-            # dependencia binaria, funciona en cualquier plataforma). Si
-            # ninguno de los 2 funciona para una entrada dada, se falla de
-            # forma explicita en vez de devolver un numero que podria estar
-            # mal sin que se note (misma filosofia de diseño que el proyecto
-            # ya tenia antes de este cambio, ver commit_no_preguntar en la
-            # memoria del proyecto principal).
-            raise RuntimeError(
-                "No se pudo ejecutar el algoritmo real de Critical Flow por "
-                "ninguno de los 2 caminos disponibles en esta copia sin "
-                "dependencias (llamada directa a FlowXpert.xll, o porte "
-                "Python puro validado). El emulador Unicorn fue retirado "
-                "deliberadamente de este repositorio. Por diseño, este "
-                "sistema NO usa una formula aproximada de respaldo para "
-                "este campo. Detalle: " + " | ".join(_errores)
-            )
+            try:
+                from . import _aga10_emulador as _a10e
+                _slots = _a10e._composicion_a_slots(composicion)
+                _real = _a10e.calcular_aga10_extended_real(_slots, P_kPa * 1000.0, T_K,
+                                                            Pb_kPa * 1000.0, Tb_K)
+                # [CERTAIN, 2026-08-04] Indicador explicito de que metodo se
+                # uso de verdad -- antes de esto, si el emulador fallaba
+                # (falta unicorn/.so en la maquina), el resultado caia en
+                # silencio al respaldo aproximado sin ninguna senal visible.
+                # Ver interfaz_calculo_flujo.py (aviso en la GUI segun el
+                # valor de este campo).
+                metodo_critical_flow = "emulador_exacto"
+            except Exception as _err_emulador:
+                # [CERTAIN, 2026-08-04 -- CAMBIO DE DISEÑO deliberado, pedido
+                # explicito del usuario] El usuario decidio que NO quiere un
+                # "plan B" aproximado disponible para Critical Flow Factor:
+                # si no se puede ejecutar el algoritmo real (extraido, no
+                # reinventado, o -- desde 2026-08-31 -- portado y validado
+                # con evidencia cuantitativa) por NINGUNO de los 3 caminos
+                # disponibles, es mejor fallar de forma explicita que
+                # entregar un numero que podria estar mal sin que se note.
+                _errores.append(f"unicorn: {_err_emulador!r}")
+                raise RuntimeError(
+                    "No se pudo ejecutar el algoritmo real de Critical Flow "
+                    "por NINGUNO de los 3 caminos disponibles (llamada "
+                    "directa a FlowXpert.xll, porte Python puro validado, "
+                    "ni emulador Unicorn del .so de Android). Por diseño, "
+                    "este sistema NO usa una formula aproximada de respaldo "
+                    "para este campo. Detalle: " + " | ".join(_errores)
+                ) from _err_emulador
 
         if _real is not None:
             critical_flow_factor = _real["critical_flow_factor"]
