@@ -218,6 +218,7 @@ import math
 # ===========================================================================
 _LBM_FT3_A_KG_M3 = 16.0184634
 _PSIA_A_BAR = 0.0689475729
+_PSIA_A_BAR_FLOWXPERT = 0.0689476
 
 
 def _redondear_cifras_significativas(valor: float, n_cifras: int) -> float:
@@ -463,11 +464,14 @@ def api_mpms_11_3_2_1_ethylene_puro(temp_f: float, pressure_psia: float,
                           "limite de cordura de 100 lbm/ft3 replicado del binario real "
                           "(codigo de error 2) -- condicion sin sentido fisico.")}
 
-    if api_rounding == 1:
-        density_lbm_ft3 = _redondear_cifras_significativas(density_lbm_ft3, 5)
-
     T_R = temp_f + 459.67
     z = (pressure_psia * _ETH_M) / (T_R * density_lbm_ft3 * _ETH_R)
+    if api_rounding == 1:
+        # [CERTAIN, 2026-10-06, rutina real API_MPMS_11_3_2_1::Calc emulada] Con API Rounding la densidad (lbm/ft3)
+        # y Z se redondean a 5 DECIMALES (no 5 cifras significativas): 17.98559089 -> 17.98559, Z 0.3799925 ->
+        # 0.37999 (Z con la densidad sin redondear). Coincide con la captura (288.1014 kg/m3, Z 0.379990).
+        density_lbm_ft3 = round(density_lbm_ft3, 5)
+        z = round(z, 5)
 
     return {
         "density_kg_m3": density_lbm_ft3 * _LBM_FT3_A_KG_M3,
@@ -601,7 +605,9 @@ def api_mpms_11_3_3_2_propylene_puro(temp_f: float, pressure_psia: float,
         aviso: str|None.
     """
     p_vap_psia = math.exp(12.5983 - 4015.63 / (temp_f + 460.068))
-    equilibrium_pressure_bar = p_vap_psia * _PSIA_A_BAR
+    # [CERTAIN, 2026-10-06] FlowXpert pasa psia -> bar con 0.0689476 (misma constante que GPA TP-15): 112.79425 psia
+    # -> 7.776893 bar (captura libro 06, caso 3) y el caso real 60 F / 200 psia -> 9.047929 (con 0.0689475729 salia 9.047925).
+    equilibrium_pressure_bar = p_vap_psia * _PSIA_A_BAR_FLOWXPERT
 
     fuera_de_rango = not (_PRO_T_MIN_F <= temp_f <= _PRO_T_MAX_F
                            and 0.0 <= pressure_psia <= _PRO_P_MAX_PSIA)
@@ -627,7 +633,9 @@ def api_mpms_11_3_3_2_propylene_puro(temp_f: float, pressure_psia: float,
 
     ctpl = density_lbm_ft3 / 32.6058
     if api_rounding == 1:
-        density_lbm_ft3 = _redondear_cifras_significativas(density_lbm_ft3, 5)
+        # [CERTAIN, 2026-10-06, rutina real API2540::API_MPMS_11_3_3_2 emulada] densidad redondeada a 5 DECIMALES en
+        # lbm/ft3 (31.64783567 -> 31.64784 = 506.9498 kg/m3, igual que FlowXpert); CTPL sin redondear.
+        density_lbm_ft3 = round(density_lbm_ft3, 5)
 
     return {
         "density_kg_m3": density_lbm_ft3 * _LBM_FT3_A_KG_M3,

@@ -781,6 +781,13 @@ def calcular_propiedades(composicion: dict, T_K: float, P_kPa: float):
     """Punto de entrada de alto nivel: composicion por nombre + T,P -> propiedades."""
     x = _composicion_a_x(composicion)
     D, ierr, msg = DensityGERG(T_K, P_kPa, x)
+    if ierr:
+        # [CERTAIN, 2026-10-05, captura real libro 01 caso 11] CO2 puro supercritico (308.15 K / 9600 kPa): el
+        # arranque de gas no converge y antes se devolvia la densidad de gas ideal. Con arranque de liquido
+        # (iFlag = 2) da 696.291 kg/m3; FlowXpert 696.2872 kg/m3 (0.0006 %). Hallazgo D-43.
+        D2, ierr2, msg2 = DensityGERG(T_K, P_kPa, x, iFlag=2)
+        if not ierr2:
+            D, ierr, msg = D2, ierr2, msg2
     resultado = PropertiesGERG(T_K, D, x)
     resultado["D_mol_l"] = D
     resultado["ierr"] = ierr
@@ -1010,6 +1017,224 @@ def calcular_flash(composicion: dict, T_K: float, P_kPa: float,
                                         duplicar_fase_ausente, P_kPa)
 
 
+# =============================================================================
+# FLASH BIFASICO (solo pantalla "GERG-2008 Flash")
+# =============================================================================
+# [CERTAIN, 2026-10-05, captura real de la app FlowXpert] La pantalla "GERG-2008 Flash" SI calcula equilibrio de
+# fases (Wet Gas 5000 kPa / 263.15 K: Vapour Fraction 0.850062, liquido = agua 999.9247 kg/m3; Nordic 5000 kPa /
+# 253.15 K: VF 0.999314). La decision del 2026-08-01 de dejar solo una fase era correcta para "GERG-2004 Flash",
+# pero no para esta pantalla. Metodo: prueba de estabilidad de Michelsen (fases de prueba tipo vapor, liquido y
+# casi puras) + Rachford-Rice con sustitucion sucesiva. Fugacidades: ln phi_i = d(n*alpha_r)/dn_i (T, V) - ln Z,
+# por diferencia central. Reproduce los 4 puntos bifasicos reales con las 6 cifras de la app.
+
+# Tc [K], Pc [kPa], factor acentrico: solo para la estimacion inicial de Wilson (no cambian el resultado final).
+_CRIT_WILSON = {1: (190.56, 4599.2, 0.011), 2: (126.19, 3395.8, 0.037), 3: (304.13, 7377.3, 0.224),
+                4: (305.32, 4872.2, 0.099), 5: (369.83, 4248.0, 0.152), 6: (407.81, 3629.0, 0.184),
+                7: (425.13, 3796.0, 0.200), 8: (460.35, 3378.0, 0.229), 9: (469.70, 3370.0, 0.251),
+                10: (507.82, 3034.0, 0.300), 11: (540.13, 2736.0, 0.350), 12: (569.32, 2497.0, 0.400),
+                13: (594.55, 2281.0, 0.443), 14: (617.70, 2103.0, 0.490), 15: (33.15, 1296.4, -0.219),
+                16: (154.58, 5043.0, 0.022), 17: (132.86, 3494.0, 0.050), 18: (647.10, 22064.0, 0.344),
+                19: (373.10, 9000.0, 0.100), 20: (5.20, 227.6, -0.390), 21: (150.69, 4863.0, -0.002)}
+
+
+def _raices_densidad(T, P, x, dmin=1e-6, npts=150):
+    """Raices mecanicamente estables (dP/dD > 0) de P(T, D, x) = P por barrido logaritmico y biseccion,
+    entre dmin y la densidad maxima razonable de la mezcla."""
+    _tc, dcx = PseudoCriticalPointGERG(x)
+    dmax = max(4.0 * dcx, 60.0)
+    pts = [dmin * (dmax / dmin) ** (k / float(npts)) for k in range(npts + 1)]
+    f = []
+    for D in pts:
+        try:
+            f.append(PressureGERG(T, D, x)[0] - P)
+        except (OverflowError, ValueError):
+            f.append(float("nan"))
+    raices = []
+    for k in range(npts):
+        a, b = f[k], f[k + 1]
+        if a != a or b != b or not (a < 0 <= b):
+            continue
+        lo, hi = pts[k], pts[k + 1]
+        for _ in range(80):
+            m = 0.5 * (lo + hi)
+            if PressureGERG(T, m, x)[0] - P < 0:
+                lo = m
+            else:
+                hi = m
+        raices.append(0.5 * (lo + hi))
+    return raices
+
+
+def _densidad_fase(T, P, x, fase):
+    """Densidad [mol/l] de la fase "V" (raiz menor) o "L" (raiz mayor). Primero Newton (DensityGERG) con
+    verificacion (presion reproducida y dP/dD > 0); si no converge o cae en la raiz de la otra fase, barrido
+    completo de la isoterma (_raices_densidad)."""
+    _tc, dcx = PseudoCriticalPointGERG(x)
+    D, ierr, _ = DensityGERG(T, P, x, iFlag=0 if fase == "V" else 2)
+    if not ierr and D > 0:
+        p2, z2, dpdd = PressureGERG(T, D, x)
+        if z2 > 0 and dpdd > 0 and abs(p2 - P) <= 1e-6 * P:
+            if (fase == "V" and D <= dcx) or (fase == "L" and D >= dcx):
+                return D
+            if fase == "L":
+                # Newton cayo en la raiz tipo gas: se busca una raiz liquida solo por encima de la pseudocritica
+                r = _raices_densidad(T, P, x, dmin=0.5 * dcx, npts=60)
+                return r[-1] if r and r[-1] > D else D
+    r = _raices_densidad(T, P, x)
+    if not r:
+        return None
+    return r[0] if fase == "V" else r[-1]
+
+
+def _ln_phi(T, P, x, fase):
+    """(ln phi[1..21], D [mol/l], Z) de la fase "V" (raiz menor) o "L" (raiz mayor); (None, 0, 0) si no hay raiz."""
+    D = _densidad_fase(T, P, x, fase)
+    if D is None:
+        return None, 0.0, 0.0
+    Z = PressureGERG(T, D, x)[1]
+    if Z <= 0:
+        return None, 0.0, 0.0
+    V = 1.0 / D
+
+    def n_alfa_r(nv):
+        # [C-31] la cache de terminos en tau (_estado, tolerancia 1e-7 en T y Tr) devolvia valores viejos para
+        # perturbaciones de composicion de 1e-6 y falseaba ln phi hasta 1e-3 (agua en GERG-2008 Flash caso 16).
+        _estado.told = None
+        n = sum(nv[1:])
+        return n * AlpharGERG(1, T, n / V, [None] + [ni / n for ni in nv[1:]])[(0, 0)]
+
+    res = [None]
+    for i in range(1, 22):
+        if x[i] <= 0.0:
+            res.append(0.0)
+            continue
+        # [C-31] derivada de segundo orden tambien para componentes traza. [C-33] Si x < 2h se usa la formula hacia
+        # adelante de 3 puntos con h = 1e-6 (la centrada con h = x/2 diminuto tenia ruido de redondeo ~1e-8 que
+        # impedia cerrar el criterio de convergencia del flash).
+        h = 1e-6
+        nv = list(x)
+        if x[i] > 2.0 * h:
+            nv[i] = x[i] + h
+            fp = n_alfa_r(nv)
+            nv[i] = x[i] - h
+            fm = n_alfa_r(nv)
+            deriv = (fp - fm) / (2.0 * h)
+        else:
+            f0 = n_alfa_r(nv)
+            nv[i] = x[i] + h
+            f1 = n_alfa_r(nv)
+            nv[i] = x[i] + 2.0 * h
+            f2 = n_alfa_r(nv)
+            deriv = (-3.0 * f0 + 4.0 * f1 - f2) / (2.0 * h)
+        res.append(deriv - math.log(Z))
+    _estado.told = None
+    return res, D, Z
+
+
+def _k_wilson(T, P):
+    return [None] + [_CRIT_WILSON[i][1] / P * math.exp(5.373 * (1 + _CRIT_WILSON[i][2]) * (1 - _CRIT_WILSON[i][0] / T))
+                     for i in range(1, 22)]
+
+
+def _rachford_rice(z, K):
+    comp = [i for i in range(1, 22) if z[i] > 0]
+
+    def f(b):
+        return sum(z[i] * (K[i] - 1) / (1 + b * (K[i] - 1)) for i in comp)
+
+    if f(0.0) < 0:
+        return 0.0
+    if f(1.0) > 0:
+        return 1.0
+    lo, hi = 0.0, 1.0
+    for _ in range(200):
+        m = 0.5 * (lo + hi)
+        if f(m) > 0:
+            lo = m
+        else:
+            hi = m
+    return 0.5 * (lo + hi)
+
+
+def _es_estable(T, P, z):
+    """Prueba de estabilidad de Michelsen. Devuelve (estable, tpd_minimo)."""
+    lnf_v, _, _ = _ln_phi(T, P, z, "V")
+    lnf_l, _, _ = _ln_phi(T, P, z, "L")
+    cand = [lf for lf in (lnf_v, lnf_l) if lf is not None]
+    if not cand:
+        return True, 0.0
+
+    def g_ref(lf):
+        return sum(z[i] * (math.log(z[i]) + lf[i]) for i in range(1, 22) if z[i] > 0)
+
+    lnf_ref = min(cand, key=g_ref)
+    d = [None] + [(math.log(z[i]) + lnf_ref[i]) if z[i] > 0 else 0.0 for i in range(1, 22)]
+    K = _k_wilson(T, P)
+    pruebas = [("V", [None] + [z[i] * K[i] for i in range(1, 22)]),
+               ("L", [None] + [z[i] / K[i] for i in range(1, 22)])]
+    for i in range(1, 22):
+        if z[i] >= 1e-3:  # fases de prueba casi puras solo de componentes con al menos 0.1 %
+            w = [None] + [1e-6 if z[j] > 0 else 0.0 for j in range(1, 22)]
+            w[i] = 1.0
+            pruebas.append(("L", w))
+    tpd_min = 0.0
+    for fase, W in pruebas:
+        for _ in range(60):
+            s = sum(W[1:])
+            lnf, _, _ = _ln_phi(T, P, [None] + [W[i] / s for i in range(1, 22)], fase)
+            if lnf is None:
+                W = None
+                break
+            Wn = [None] + [math.exp(d[i] - lnf[i]) if z[i] > 0 else 0.0 for i in range(1, 22)]
+            cambio = sum((Wn[i] - W[i]) ** 2 for i in range(1, 22))
+            W = Wn
+            if cambio < 1e-14:
+                break
+        if W is not None:
+            tpd_min = min(tpd_min, 1.0 - sum(W[1:]))
+            if tpd_min < -1e-8:  # ya se encontro una fase de prueba inestable
+                return False, tpd_min
+    return True, tpd_min
+
+
+def _flash_bifasico(z, T, P, P_kPa):
+    K = _k_wilson(T, P)
+    b, x, y = 1.0, z, z
+    Dl = Dv = Zl = Zv = 0.0
+    for it in range(500):
+        b = _rachford_rice(z, K)
+        x = [None] + [z[i] / (1 + b * (K[i] - 1)) if z[i] > 0 else 0.0 for i in range(1, 22)]
+        y = [None] + [K[i] * x[i] for i in range(1, 22)]
+        sx, sy = sum(x[1:]), sum(y[1:])
+        x = [None] + [v / sx for v in x[1:]]
+        y = [None] + [v / sy for v in y[1:]]
+        lfl, Dl, Zl = _ln_phi(T, P, x, "L")
+        lfv, Dv, Zv = _ln_phi(T, P, y, "V")
+        if lfl is None or lfv is None:
+            return None
+        Kn = [None] + [math.exp(lfl[i] - lfv[i]) if z[i] > 0 else K[i] for i in range(1, 22)]
+        # [C-33] criterio por encima del ruido numerico de ln phi (~3e-8 en ln K, derivada numerica): max|dlnK| < 1e-7
+        # (la misma tolerancia de FlowXpert). Antes sum(dlnK^2) < 1e-14 no se cerraba por ese ruido y el flash daba
+        # ~144 vueltas (24 s) aunque ya estaba convergido en ~5; al cortar aqui el error remanente es ~1e-10.
+        err = max(abs(math.log(Kn[i]) - math.log(K[i])) for i in range(1, 22) if z[i] > 0)
+        K = Kn
+        if err < 1e-7:
+            break
+    if not (0.0 < b < 1.0):
+        return None
+    Mv, Ml, Mt = MolarMassGERG(y), MolarMassGERG(x), MolarMassGERG(z)
+    Dt = 1.0 / (b / Dv + (1.0 - b) / Dl)
+    return {
+        "vapor_fraction": b,
+        "Z_vapor": Zv, "Z_liquido": Zl, "Z_total": b * Zv + (1.0 - b) * Zl,
+        "D_vapor_mol_l": Dv, "D_liquido_mol_l": Dl, "D_total_mol_l": Dt,
+        "D_vapor_kg_m3": Dv * Mv, "D_liquido_kg_m3": Dl * Ml, "D_total_kg_m3": Dt * Mt,
+        "iteraciones": it + 1, "ierr": 0, "msg_error": "", "solucion_trivial": False,
+        "aviso_baja_presion_flowxpert": _aviso_baja_presion(P_kPa),
+        "composicion_vapor": y, "composicion_liquido": x,
+    }
+
+
 def calcular_flash_gerg2008(composicion: dict, T_K: float, P_kPa: float):
     """Alias explicito de `calcular_flash` con `duplicar_fase_ausente=True`,
     para la pantalla real 'GERG-2008 Flash' (distinta de 'GERG-2004 Flash',
@@ -1019,6 +1244,12 @@ def calcular_flash_gerg2008(composicion: dict, T_K: float, P_kPa: float):
     kg/m3, que SI coincide con la densidad masica real, a diferencia de la
     pantalla 'GERG-2004 Flash' donde el numero bajo la etiqueta 'kg/m3' es
     en realidad la densidad molar)."""
+    z = _composicion_a_x(composicion)
+    estable, _tpd = _es_estable(T_K, P_kPa, z)
+    if not estable:
+        res = _flash_bifasico(z, T_K, P_kPa, P_kPa)
+        if res is not None:
+            return res
     return calcular_flash(composicion, T_K, P_kPa, duplicar_fase_ausente=True)
 
 

@@ -111,6 +111,10 @@ del sonido publicados por el propio NIST para DETAIL.
 ===============================================================================
 VALIDACION DE RANGO (2026-07-22) -- ver validar_rango_aga8()
 ===============================================================================
+[CERTAIN, 2026-10-05] ACTUALIZACION: la clasificacion de abajo estaba MAL leida (orden de componentes de
+AGA-8 DETAIL en vez del orden estandar de FlowXpert; y la edicion 2017 usa within_range_a/b/c con T, P y
+composicion). Ver el docstring de validar_rango_aga8() para la regla correcta, validada 31/31 contra capturas
+reales (hallazgo D-49). El texto siguiente se conserva como registro historico.
 [CERTAIN] Se investigo que hace realmente el selector "Edition" (1994/2017)
 en la app, bajando a ensamblador crudo (Ghidra para direcciones + capstone
 para desensamblar con saltos condicionales reales) de las funciones
@@ -942,86 +946,151 @@ def PropertiesDetail(T, D, x):
 
 
 def validar_rango_aga8(composicion: dict, T_K: float, P_kPa: float) -> dict:
-    """Replica el chequeo de rango real de FlowXpert (`Math_AGA8_C`), extraido
-    por ingenieria inversa de `libFXLibrary.so` (Ghidra + capstone, lectura de
-    ensamblador crudo -- ver docstring del modulo, seccion "VALIDACION DE
-    RANGO").
+    """Replica el "Range Status" real de la pantalla "AGA-8" de FlowXpert (`Math_AGA8_M` de libFXLibrary.so).
 
-    [CERTAIN] El GATE real (si la app calcula o no) es simple e
-    INDEPENDIENTE de la Edicion seleccionada: T en [-129, 204] degC y P en
-    [0, 1379] bar(a). Fuera de eso la app no calcula.
+    [CERTAIN, 2026-10-05, ensamblador x86 leido con capstone, SUPERA la version del 2026-07-22] La lectura de
+    julio interpreto el arreglo de composicion en el orden de AGA-8 DETAIL; FlowXpert lo pasa en su orden
+    ESTANDAR (metano, N2, CO2, etano, propano, agua, H2S, H2, CO, O2, iC4, nC4, iC5, nC5, nC6..nC10, He, Ar).
+    Con el orden correcto los limites son exactamente los rangos publicados de AGA-8. Ademas la edicion 2017 no
+    usa la regla de composicion de 1994 sino 3 subregiones T/P/composicion (`within_range_a/b/c`).
 
-    [CERTAIN] Clasificacion informativa 1994 (Normal/Extendido), no bloquea
-    el calculo, solo indica que tan fiable es el resultado:
-        Normal:    T en [-8, 62] degC   y P en [0, 120] bar(a)
-        Extendido: T en [-129, 204] degC y P en [0, 1379] bar(a)
-
-    [CERTAIN] Clasificacion informativa 2017 por COMPOSICION (no por T/P --
-    esa parte de 2017, within_range_a/b/c, no se replico, ver docstring):
-        Si Metano < 45%: Extendido directo.
-        Si Metano en [45%,100%]: Normal SOLO si, ademas de que TODOS estos
-        limites se cumplan, n-Hexano es EXACTAMENTE 0 (si n-Hexano>0, cae a
-        Extendido aunque el resto cumpla -- confirmado en el ensamblador,
-        no es un error de lectura):
-            Etano<=10%, Propano<=4%, (nC7+nC8)<=1%, (nC9+nC10)<=0.3%,
-            H2<=0.2%, O2<=0.2%, CO<=0.2%, Agua<=0.2%, H2S<=0.2%,
-            n-Pentano<=3%, CO2<=30%, N2<=50%, Helio<=3%, n-Butano<=0.02%,
-            Isopentano<=10%, Isobutano<=0.05%.
-
-    Devuelve dict con: valido (bool, gate real), clasificacion_1994,
-    clasificacion_2017, mensaje.
+      GATE (si el motor calcula): T en [-129, 204] degC y P en [0, 1379] bar(a).
+      Edicion 1994 (`Math_AGA8_M`, rama edicion=1): peor entre
+        - composicion (`AGA8::CheckAga8DetailCompExtended`, 0xe5130): Normal si metano >= 45 %, N2 <= 50 %,
+          CO2 <= 30 %, etano <= 10 %, propano <= 4 %, butanos <= 1 %, pentanos <= 0.3 %, nC6..nC10 <= 0.2 %
+          cada uno, H2 <= 10 %, CO <= 3 %, He <= 0.2 %, agua <= 0.05 %, H2S <= 0.02 %, Ar = 0, O2 = 0.
+          Fuera de rango si excede el rango expandido (propano 12 %, butanos 6 %, pentanos 4 %, He 3 %, CO 3 %,
+          Ar 1 %, O2 21 %); si no, Extendido.
+        - T/P (`check_aga8_temp_press_ranges_1994`, 0xe54e0): Normal en [-8, 62] degC y P <= 120 bar(a).
+      Edicion 2017 (`check_aga8_temp_press_ranges_2017`, 0xe6200): Normal si cumple alguna subregion
+        a (T >= -4 degC, P <= 103 bar, limites dependientes de propano/N2/butanos), b (T >= -4 degC,
+        P <= 21 bar, tabla 0x26ce00) o c (T >= -8 degC, P <= 210 bar, tabla 0x26cec0); si no, Extendido;
+        Fuera de rango si T < -130 o > 180 degC o P > 2800 bar.
+    Validado contra 16 capturas reales de AGA-8 (8 por edicion) y 15 de AGA-10: 31 de 31 (hallazgo D-49).
+    Informativo, NO bloquea el calculo (salvo el gate).
     """
     total = sum(composicion.values())
     if total <= 0:
         raise ValueError("La composicion no puede sumar cero.")
-    f = {nombre: composicion.get(nombre, 0.0) / total for nombre in NOMBRES_COMPONENTES}
+    x = {nombre: composicion.get(nombre, 0.0) / total for nombre in NOMBRES_COMPONENTES}
 
     T_C = T_K - 273.15
     P_bar = P_kPa / 100.0
-
-    # --- GATE real (independiente de edicion) ---
     valido = (-129.0 <= T_C <= 204.0) and (0.0 <= P_bar <= 1379.0)
 
-    # --- Clasificacion 1994 ---
-    if (-8.0 <= T_C <= 62.0) and (0.0 <= P_bar <= 120.0):
-        clas_1994 = "Normal"
-    elif (-129.0 <= T_C <= 204.0) and (0.0 <= P_bar <= 1379.0):
-        clas_1994 = "Extendido"
-    else:
-        clas_1994 = "Fuera de rango"
-
-    # --- Clasificacion 2017 por composicion ---
-    metano = f["Metano"]
-    if metano < 0.45:
-        clas_2017 = "Extendido"
-    elif metano > 1.0:
-        clas_2017 = "Fuera de rango"
-    else:
-        nC7_nC8 = f["n-Heptano"] + f["n-Octano"]
-        nC9_nC10 = f["n-Nonano"] + f["n-Decano"]
-        normal_estricto = (
-            f["Etano"] <= 0.10 and f["Propano"] <= 0.04 and nC7_nC8 <= 0.01
-            and nC9_nC10 <= 0.003
-            and f["Hidrogeno"] <= 0.002 and f["Oxigeno"] <= 0.002 and f["CO"] <= 0.002
-            and f["Agua"] <= 0.002 and f["H2S"] <= 0.002 and f["n-Pentano"] <= 0.03
-            and f["CO2"] <= 0.30 and f["Nitrogeno"] <= 0.50 and f["Helio"] <= 0.03
-            and f["n-Hexano"] == 0.0  # debe ser EXACTAMENTE 0 (confirmado en asm)
-            and f["n-Butano"] <= 0.0002 and f["Isopentano"] <= 0.10
-            and f["Isobutano"] <= 0.0005
-        )
-        clas_2017 = "Normal" if normal_estricto else "Extendido"
+    cod_1994 = max(_rango_comp_1994(x), _rango_tp_1994(T_C, P_bar))
+    cod_2017 = _rango_2017(T_C, P_bar, x)
+    clas_1994, clas_2017 = _TEXTO_RANGO[cod_1994], _TEXTO_RANGO[cod_2017]
 
     if not valido:
         mensaje = "Fuera de rango de T/P -- FlowXpert no calcularia este caso."
     else:
-        mensaje = f"1994: {clas_1994}; 2017 (por composicion): {clas_2017}."
+        mensaje = f"1994: {clas_1994}; 2017: {clas_2017}."
 
     return {
         "valido": valido,
         "clasificacion_1994": clas_1994,
         "clasificacion_2017": clas_2017,
+        "codigo_1994": cod_1994,
+        "codigo_2017": cod_2017,
         "mensaje": mensaje,
     }
+
+
+_TEXTO_RANGO = {0: "Normal", 1: "Extendido", 2: "Fuera de rango"}
+# Texto de la salida "Range Status" de FlowXpert. [Certain] "Extended range" (capturas); la app no muestra el
+# campo cuando es Normal. [Guessing] texto para fuera de rango (sin captura).
+TEXTO_RANGE_STATUS_FLOWXPERT = {0: "Normal range", 1: "Extended range", 2: "Out of range"}
+
+
+def _x(x, n):
+    return x.get(n, 0.0)
+
+
+def _rango_comp_1994(x):
+    """AGA8::CheckAga8DetailCompExtended (0xe5130): 0 Normal, 1 Extendido, 2 fuera del rango expandido."""
+    but = _x(x, "Isobutano") + _x(x, "n-Butano")
+    pen = _x(x, "Isopentano") + _x(x, "n-Pentano")
+    expandido = (_x(x, "Metano") <= 1 and _x(x, "Nitrogeno") <= 1 and _x(x, "CO2") <= 1 and _x(x, "Etano") <= 1
+                 and _x(x, "Propano") <= 0.12 and but <= 0.06 and pen <= 0.04 and _x(x, "Helio") <= 0.03
+                 and _x(x, "Hidrogeno") <= 1 and _x(x, "CO") <= 0.03 and _x(x, "Argon") <= 0.01
+                 and _x(x, "Oxigeno") <= 0.21 and _x(x, "H2S") <= 1)
+    if not expandido:
+        return 2
+    normal = (_x(x, "Metano") >= 0.45 and _x(x, "Etano") <= 0.10 and _x(x, "Propano") <= 0.04 and but <= 0.01
+              and pen <= 0.003
+              and all(_x(x, n) <= 0.002 for n in ("n-Hexano", "n-Heptano", "n-Octano", "n-Nonano", "n-Decano"))
+              and _x(x, "CO") <= 0.03 and _x(x, "CO2") <= 0.30 and _x(x, "Nitrogeno") <= 0.50
+              and _x(x, "Helio") <= 0.002 and _x(x, "Argon") <= 0 and _x(x, "Oxigeno") <= 0
+              and _x(x, "H2S") <= 0.0002 and _x(x, "Hidrogeno") <= 0.10 and _x(x, "Agua") <= 0.0005)
+    return 0 if normal else 1
+
+
+def _rango_tp_1994(T_C, P_bar):
+    """AGA8::check_aga8_temp_press_ranges_1994 (0xe54e0)."""
+    if not (-129 <= T_C <= 204 and 0 <= P_bar <= 1379):
+        return 2
+    return 0 if (-8 <= T_C <= 62 and P_bar <= 120) else 1
+
+
+# Orden de los arreglos de limites de within_range_b/c (orden AGA-8 DETAIL) y sus valores (0x26ce00 / 0x26cec0).
+_ORDEN_LIM = ["Metano", "Nitrogeno", "CO2", "Etano", "Propano", "Isobutano", "n-Butano", "Isopentano",
+              "n-Pentano", "n-Hexano", "n-Heptano", "n-Octano", "n-Nonano", "n-Decano", "Hidrogeno", "Oxigeno",
+              "CO", "Agua", "H2S", "Helio", "Argon"]
+_LIM_2017_B = [1, 0.5, 0.8, 0.25, 0.06, 0.015, 0.06, 0.02, 0.02, 0.002, 0.002, 0.002, 0.002, 0.002, 1, 0.01,
+               0.1, 0.014, 0.04, 0.05, 0.03]
+_LIM_2017_C = [1, 0.03, 0.03, 0.04, 0.02, 0.001, 0.004, 0.001, 0.001, 0.0003, 0.0001, 3e-05, 3e-05, 3e-05,
+               0.01, 0.002, 0.01, 5e-05, 0.001, 0.004, 0.002]
+
+
+def _dentro(x, limites):
+    return all(0 <= _x(x, n) <= lim for n, lim in zip(_ORDEN_LIM, limites))
+
+
+def _within_2017_a(T_C, P_bar, x):
+    """within_range_a (0xe5570): limite de CO2 segun propano, butanos y N2."""
+    c3, n2 = _x(x, "Propano"), _x(x, "Nitrogeno")
+    if c3 > 0.02:
+        lim_co2 = 0.05
+    elif c3 > 0.01:
+        lim_co2 = 0.07
+    elif _x(x, "Isobutano") > 0.001 or _x(x, "n-Butano") > 0.003 or n2 > 0.15:
+        lim_co2 = 0.1
+    elif n2 > 0.07:
+        lim_co2 = 0.2
+    else:
+        lim_co2 = 0.3
+    if T_C < -4 or P_bar > 103:
+        return False
+    limites = [1, 0.5, lim_co2, 0.1, 0.04, 0.004, 0.006, 0.003, 0.003, 0.0012, 0.0004, 0.0003, 0.0003, 0.0003,
+               0.05, 0.002, 0.01, 0.0005, 0.001, 0.004, 0.002]
+    if not _dentro(x, limites):
+        return False
+    if _x(x, "Isopentano") + _x(x, "n-Pentano") > 0.003:
+        return False
+    c7mas = sum(_x(x, n) for n in ("n-Heptano", "n-Octano", "n-Nonano", "n-Decano"))
+    return c7mas + _x(x, "n-Hexano") <= 0.0015 and c7mas <= 0.0004
+
+
+def _within_2017_b(T_C, P_bar, x):
+    """within_range_b (0xe5c00)."""
+    if T_C < -4 or P_bar > 21 or not _dentro(x, _LIM_2017_B):
+        return False
+    return _x(x, "Isopentano") + _x(x, "n-Pentano") <= 0.02
+
+
+def _within_2017_c(T_C, P_bar, x):
+    """within_range_c (0xe5f20)."""
+    return T_C >= -8 and P_bar <= 210 and _dentro(x, _LIM_2017_C)
+
+
+def _rango_2017(T_C, P_bar, x):
+    """AGA8::check_aga8_temp_press_ranges_2017 (0xe6200)."""
+    cod = 0 if (_within_2017_a(T_C, P_bar, x) or _within_2017_b(T_C, P_bar, x)
+                or _within_2017_c(T_C, P_bar, x)) else 1
+    if T_C < -130 or T_C > 180 or P_bar < 0 or P_bar > 2800:
+        cod = 2
+    return cod
 
 
 def calcular_propiedades(composicion: dict, T_K: float, P_kPa: float):

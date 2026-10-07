@@ -10,7 +10,7 @@ Normas usadas (cada una ejecutable sola, ver su propio docstring de fuente):
     normas/NX_19.py              -> supercompresibilidad NX-19
     normas/AGA_8.py              -> Z y propiedades, ecuacion DETAIL
     normas/GERG_2008.py          -> Z y propiedades, ecuacion GERG-2008
-    normas/GERG_2004.py          -> alias de GERG_2008 (Gas) + flash liquido-vapor
+    normas/GERG_2004.py          -> GERG-2004 con datos de FlowXpert (Gas) + flash monofasico
     normas/AGA_10.py              -> velocidad del sonido y Fpv (usa AGA_8)
     normas/AGA_7.py               -> conversion de caudal (AGA-9 usa la misma formula)
 
@@ -33,6 +33,8 @@ Uso:
     python interfaz_calculo_flujo.py
 """
 
+import math
+from decimal import ROUND_HALF_EVEN, Decimal
 import os
 import sys
 import tempfile
@@ -49,6 +51,7 @@ from normas.AGA_8 import (  # noqa: E402
     NOMBRES_COMPONENTES as GAS_NOMBRES_COMPONENTES,
     calcular_propiedades as aga8_calcular_propiedades,
     validar_rango_aga8,
+    TEXTO_RANGE_STATUS_FLOWXPERT,
     NEO_PENTANO_MODOS, aplicar_modo_neo_pentano, validar_suma_composicion,
 )
 from normas.GERG_2008 import (  # noqa: E402
@@ -72,6 +75,12 @@ from normas.ISO_6976 import (  # noqa: E402
     calcular_masa_molar as iso6976_calcular_masa_molar,
     calcular_masa_molar_metodo_b as iso6976_calcular_masa_molar_metodo_b,
     calcular_factor_compresion as iso6976_calcular_factor_compresion,
+    calcular_factor_compresion_suma as iso6976_calcular_factor_compresion_suma,
+    calcular_factor_compresion_suma_2016 as iso6976_calcular_factor_compresion_suma_2016,
+    calcular_poder_calorifico_molar_bruto_2016 as iso6976_calcular_pc_bruto_2016,
+    calcular_poder_calorifico_molar_neto_2016 as iso6976_calcular_pc_neto_2016,
+    calcular_masa_molar_2016 as iso6976_calcular_masa_molar_2016,
+    R_GAS_2016 as ISO6976_R_GAS_2016,
     calcular_volumen_molar_ideal as iso6976_calcular_volumen_molar_ideal,
     calcular_volumen_molar_real as iso6976_calcular_volumen_molar_real,
     calcular_poder_calorifico_molar as iso6976_calcular_poder_calorifico_molar,
@@ -191,20 +200,23 @@ CACHE_DIR = os.path.join(tempfile.gettempdir(), "focqus_calculo_flujo_cache")
 # `android_sdk_setup/validar_iso6976_2016_cromatografo.py` para el metodo y
 # los 5 casos completos. indice_bj/indice_temp_raw_aire NO cambian (Z y
 # densidad_relativa ya cerraban <0.03% con los valores existentes). ***
+# [CERTAIN, 2026-10-05, captura real de la app FlowXpert, libro 02] indice_hoj (columna del poder calorifico
+# en TABLA_CONSTANTES) por temperatura de COMBUSTION: 25 degC -> 0, 20 degC -> 1, 15 degC -> 2, 0 degC -> 3.
+# Antes se reusaba 2 (15 degC) en todas: poder calorifico de -0.15 % (0/0/0) a +0.11 % (25/x/x).
 REF_TEMPERATURE_ISO6976_2016 = [
     ("15/15/15 (Default)", 1, 2, 288.15, 2, 2,
      "CERTAIN: caso real confirmado por Frida en vivo (ISO_6976.py secc. 4.3/4.5/4.6)."),
-    ("0/0/0", 2, 0, 273.15, 2, 1,
+    ("0/0/0", 2, 0, 273.15, 3, 1,
      "GUESSING: combo nunca probado en vivo -- indice_bj/T0/indice_hoj son el mejor "
      "estimador disponible (analogia con el caso 15/0/0), sin confirmacion propia."),
     ("15/0/0", 3, 0, 273.15, 2, 1,
      "LIKELY: metering confirmado por Frida (indice_temp_raw=1, secc. 4.3); indice_bj/T0 "
      "por mejor ajuste numerico (secc. 4.4, dif. ~0.018%); indice_hoj=2 CERTAIN por Frida "
      "(combustion=15 C, secc. 4.3 conclusion 2)."),
-    ("25/0/0", 4, 0, 273.15, 2, 1,
+    ("25/0/0", 4, 0, 273.15, 0, 1,
      "GUESSING: combo nunca probado en vivo -- combustion=25 C no tiene indice_hoj "
      "confirmado, se reusa 2 (unico valor CERTAIN del proyecto) como estimador."),
-    ("20/20/20", 5, 2, 293.15, 2, 4,
+    ("20/20/20", 5, 2, 293.15, 1, 4,
      "LIKELY: metering confirmado por Frida (indice_temp_raw=4, secc. 4.4); indice_bj por "
      "mejor ajuste numerico de Z (secc. 4.4). T0 CORREGIDO 2026-08-18: el valor viejo "
      "(288.15 K, copiado de rc=1) daba dif. 1.71% en densidad_real/PCB_volumen contra un "
@@ -212,7 +224,7 @@ REF_TEMPERATURE_ISO6976_2016 = [
      "cierra 0.02-0.03% en Mmix/Z/densidad_real/densidad_relativa/PCB_volumen/Wobbe contra "
      "ese mismo caso real. indice_hoj=2 sin confirmar para combustion=20 C, reusado como "
      "estimador."),
-    ("25/20/20", 6, 2, 293.15, 2, 4,
+    ("25/20/20", 6, 2, 293.15, 0, 4,
      "GUESSING: combo nunca probado en vivo -- combustion=25 C sin indice_hoj confirmado, "
      "se reusa 2 como estimador. T0 CORREGIDO 2026-08-18 por analogia directa con rc=5 "
      "(mismo metering=20 C): 293.15 K (conversion literal), no 288.15 K (el valor viejo, "
@@ -403,6 +415,39 @@ API_PRODUCTOS = [
     ("Crude", 1), ("Refined, auto", 2), ("Gasoline", 3), ("Transition area", 4),
     ("Jet fuel", 5), ("Fuel oil", 6), ("Lub oil", 7),
 ]
+API_NOMBRE_PRODUCTO = {codigo: nombre for nombre, codigo in API_PRODUCTOS}
+# [CERTAIN, 2026-10-06] GPA-TP15: FlowXpert convierte psia <-> bar con 0.0689476 (constante del binario). Con
+# 1/14.5037738 la presion de equilibrio en bar diferia 4e-7 (ultimo digito) en los 3 casos del libro 07.
+GPA_TP15_BAR_POR_PSI = 0.0689476
+
+
+def _fmt_redondeo_comercial(valor: float, decimales: int) -> str:
+    """Redondeo comercial (el 5 sube) sobre la representacion decimal del numero, como FlowXpert.
+    [CERTAIN, 2026-10-06] alpha = 0.0006875 (exacto tras la cascada API-2540) se muestra 0.000688; el formato
+    de Python lo dejaba en 0.000687 por la representacion binaria."""
+    from decimal import Decimal, ROUND_HALF_UP
+    return str(Decimal(repr(valor)).quantize(Decimal(1).scaleb(-decimales), rounding=ROUND_HALF_UP))
+
+
+def _formato_flowxpert(valor: float) -> str:
+    """Texto de una salida tal como lo muestra FlowXpert. [CERTAIN, 2026-10-06, C-30, decompilado de classes.dex]
+    FXFunctionViewData.outputDisplayValueForOutput -> FXNumberFormatter.display().stringFromNumber(valor, 7):
+    n = 7 - len(String.valueOf((int) valor)) (el signo cuenta; 0.x da "0"); DecimalFormat.getInstance() con
+    setMinimumFractionDigits(n) -> max(3, n) decimales como maximo, redondeo HALF_EVEN sobre el valor binario
+    exacto, sin agrupacion; el campo de pantalla muestra 8 caracteres. Ej.: 51688.589 -> "51688.589" -> "51688.58";
+    533.15618 -> "533.1562"; -114.18371 -> "-114.184"; K2 -0.0018684 -> "-0.001868" -> "-0.00186".
+    Reemplaza las aproximaciones anteriores (truncar / redondear a 8 caracteres, %.7g)."""
+    if valor != valor or math.isinf(valor):
+        return str(valor)
+    n_min = max(0, 7 - len(str(int(valor))))
+    n_max = max(3, n_min)
+    texto = format(Decimal(valor).quantize(Decimal(1).scaleb(-n_max), rounding=ROUND_HALF_EVEN), "f")
+    entero, _, frac = texto.partition(".")
+    frac = frac.rstrip("0")
+    frac += "0" * (n_min - len(frac))
+    return (entero + ("." + frac if frac else ""))[:8]
+
+
 # Enum real "API Rounding" (Tipo B, Table6/24/54_1980) y "API-2540 Rounding"
 # (wrappers combinados 1980 con presion) -- MISMAS 4 opciones, confirmadas en
 # vivo: solo el valor 2 ("Enabled (table values)") redondea el resultado
@@ -1294,9 +1339,9 @@ class App(tk.Tk):
         rango_frame = ttk.LabelFrame(right_col, text="Rango valido (Edition 1994 / 2017)", padding=10)
         rango_frame.pack(fill="x", pady=(10, 0))
         self.aga8_rango_vars = self._build_result_labels(
-            rango_frame, ["clasificacion_1994", "clasificacion_2017", "gate"],
-            {"clasificacion_1994": "Edition 1994", "clasificacion_2017": "Edition 2017",
-             "gate": "El motor calcula?"})
+            rango_frame, ["range_status", "clasificacion_1994", "clasificacion_2017", "gate"],
+            {"range_status": "Range Status", "clasificacion_1994": "Edition 1994",
+             "clasificacion_2017": "Edition 2017", "gate": "El motor calcula?"})
 
     def on_calcular_aga8(self):
         try:
@@ -1314,6 +1359,9 @@ class App(tk.Tk):
         rango = validar_rango_aga8(composicion, T_K, P_kPa)
         self.aga8_rango_vars["clasificacion_1994"].set(rango["clasificacion_1994"])
         self.aga8_rango_vars["clasificacion_2017"].set(rango["clasificacion_2017"])
+        # Salida "Range Status" de FlowXpert: la de la Edition seleccionada (Math_AGA8_M, D-49).
+        cod = rango["codigo_1994"] if self.aga8_edition_var.get() == "1994" else rango["codigo_2017"]
+        self.aga8_rango_vars["range_status"].set(TEXTO_RANGE_STATUS_FLOWXPERT[cod])
         self.aga8_rango_vars["gate"].set("Si" if rango["valido"] else "No (fuera de -129..204 degC / 0..1379 bar)")
         if not rango["valido"]:
             messagebox.showerror("Fuera de rango", rango["mensaje"])
@@ -1574,9 +1622,10 @@ class App(tk.Tk):
         PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
             "Pantalla real de FlowXpert: 'GERG-2004 Gas' -- 'Thermodynamic properties of gas "
             "according to GERG-2004 (not split).'",
-            "Es una ruta de codigo distinta de GERG-2008 Gas, pero comparte la misma tabla de "
-            "coeficientes (publicados tambien en la monografia tecnica GERG-2004). Validado "
-            "contra caso real (dif. <0.00005%). Ver normas/GERG_2004.py.",
+            "Usa los datos propios de la ruta GERG-2004 de FlowXpert: CO e isopentano segun la "
+            "norma GERG-2004 (TM15, distintos de GERG-2008); n-nonano, n-decano y H2S con una "
+            "extension propia de FlowXpert (la TM15 no los incluye). Validado contra casos reales "
+            "(dif. <0.0001%). Ver normas/GERG_2004.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1680,17 +1729,17 @@ class App(tk.Tk):
              "D_vapor_mol_l", "D_liquido_mol_l", "D_total_mol_l"],
             {"vapor_fraction": "Vapour Fraction",
              "Z_vapor": "Vapour Compr.", "Z_liquido": "Liquid Compr.", "Z_total": "Total Compr.",
-             "D_vapor_mol_l": "Vapour Density [kg/m3] (app)",
-             "D_liquido_mol_l": "Liquid Density [kg/m3] (app)",
-             "D_total_mol_l": "Total Density [kg/m3] (app)"})
+             # D-28: densidad MOLAR con su unidad real (la masica va en el recuadro de abajo).
+             "D_vapor_mol_l": "Vapour Density [kmol/m3]",
+             "D_liquido_mol_l": "Liquid Density [kmol/m3]",
+             "D_total_mol_l": "Total Density [kmol/m3]"})
 
-        masica_frame = ttk.LabelFrame(right_col, text="Densidad masica real (kg/m3, no la etiqueta de la app)",
-                                       padding=10)
+        masica_frame = ttk.LabelFrame(right_col, text="Densidad masica", padding=10)
         masica_frame.pack(fill="x", pady=(10, 0))
         self.gerg2004f_masica_vars = self._build_result_labels(
             masica_frame, ["D_vapor_kg_m3", "D_liquido_kg_m3", "D_total_kg_m3"],
-            {"D_vapor_kg_m3": "Vapor [kg/m3]", "D_liquido_kg_m3": "Liquido [kg/m3]",
-             "D_total_kg_m3": "Total [kg/m3]"})
+            {"D_vapor_kg_m3": "Vapour Density [kg/m3]", "D_liquido_kg_m3": "Liquid Density [kg/m3]",
+             "D_total_kg_m3": "Total Density [kg/m3]"})
 
     def on_calcular_gerg2004_flash(self):
         try:
@@ -1860,8 +1909,8 @@ class App(tk.Tk):
         rango_frame = ttk.LabelFrame(right_col, text="Rango valido (Range real de FlowXpert)", padding=10)
         rango_frame.pack(fill="x", pady=(10, 0))
         self.aga10_rango_vars = self._build_result_labels(
-            rango_frame, ["rango_composicion", "rango_pt", "rango_combinado"],
-            {"rango_composicion": "Por composicion", "rango_pt": "Por T/P",
+            rango_frame, ["range_status", "rango_composicion", "rango_pt", "rango_combinado"],
+            {"range_status": "Range Status", "rango_composicion": "Por composicion", "rango_pt": "Por T/P",
              "rango_combinado": "Range combinado"})
         self.aga10_advertencia_rango_var = tk.StringVar(value="")
         self.aga10_advertencia_rango_label = ttk.Label(
@@ -1951,6 +2000,8 @@ class App(tk.Tk):
                 self.aga10_rango_vars["rango_composicion"].set(rango["rango_composicion"])
                 self.aga10_rango_vars["rango_pt"].set(rango["rango_pt"])
                 self.aga10_rango_vars["rango_combinado"].set(rango["rango_combinado"])
+                self.aga10_rango_vars["range_status"].set(TEXTO_RANGE_STATUS_FLOWXPERT[
+                    {"Normal": 0, "Extendido": 1}.get(rango["rango_combinado"], 2)])
                 if rango["rango_combinado"] == "Fuera de rango":
                     self.aga10_advertencia_rango_label.config(foreground="#B03A2E")
                     self.aga10_advertencia_rango_var.set(
@@ -2006,9 +2057,16 @@ class App(tk.Tk):
                 res = calcular_velocidad_sonido_y_fpv(
                     composicion, T_K, P_kPa, Tb_K, Pb_kPa, calcular_flujo_critico=True)
             except Exception as e:
-                self.after(0, lambda: (
-                    self.aga10_calc_button.config(state="normal"),
-                    messagebox.showerror("Error de calculo", str(e))))
+                # [2026-10-06] el texto se guarda aqui: Python borra `e` al salir del except y la lambda
+                # (ejecutada despues en el hilo principal) daba NameError, sin mensaje y con "Calculando..." fijo.
+                mensaje = str(e)
+
+                def _fallo():
+                    self.aga10_calc_button.config(state="normal")
+                    for var in self.aga10_result_vars.values():
+                        var.set("-")
+                    messagebox.showerror("Error de calculo", mensaje)
+                self.after(0, _fallo)
                 return
 
             def _terminar():
@@ -2127,8 +2185,9 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error de calculo", str(e))
             return
-        self.aga5_result_vars["cv_mass_kJ_kg"].set(f"{res['cv_mass_kJ_kg']:.2f}")
-        self.aga5_result_vars["cv_vol_kJ_sm3"].set(f"{res['cv_vol_kJ_sm3']:.2f}")
+        # [C-30] formato real de la pantalla de FlowXpert (30 de 30 capturas; ver _formato_flowxpert)
+        self.aga5_result_vars["cv_mass_kJ_kg"].set(_formato_flowxpert(res['cv_mass_kJ_kg']))
+        self.aga5_result_vars["cv_vol_kJ_sm3"].set(_formato_flowxpert(res['cv_vol_kJ_sm3']))
         self.aga5_result_vars["cv_mass_BTU_lbm"].set(f"{res['cv_mass_BTU_lbm']:.4f}")
         self.aga5_result_vars["cv_vol_BTU_scf"].set(f"{res['cv_vol_BTU_scf']:.4f}")
 
@@ -2409,6 +2468,10 @@ class App(tk.Tk):
         try:
             comp = {n: float(self.iso6976_2016_entries[n].get()) / 100.0
                     for n in ISO6976_COMPONENTES}
+            # [2026-10-06] FlowXpert normaliza la composicion en ISO 6976:2016 (Dry Air suma 99.9978 %)
+            _total = sum(comp.values())
+            if _total > 0:
+                comp = {k: v / _total for k, v in comp.items()}
             p_ref_valor = float(self.iso6976_2016_pref_var.get())
             p_ref_unidad = self.iso6976_2016_pref_unidad_var.get()
             p_ref = ISO6976_PRESION_A_PA_DICT[p_ref_unidad](p_ref_valor)
@@ -2422,20 +2485,19 @@ class App(tk.Tk):
             return
         _, _rc, indice_bj, t0, indice_hoj, indice_temp_raw_aire, _nota = combo
         try:
-            if self.iso6976_2016_mmm_var.get() == "Calculate":
-                mmix = iso6976_calcular_masa_molar_metodo_b(comp)
-            else:
-                mmix = iso6976_calcular_masa_molar(comp)
-            z = iso6976_calcular_factor_compresion(comp, indice_temp=indice_bj, p_ref=p_ref, t0=t0)
-            vm_ideal = iso6976_calcular_volumen_molar_ideal(t=t0, p=p_ref)
+            # [2026-10-06] masas molares de ISO 6976:2016 (FlowXpert las usa con los dos metodos)
+            mmix = iso6976_calcular_masa_molar_2016(comp)
+            # [2026-10-05] formula de factores de suma (ver ISO_6976.calcular_factor_compresion_suma)
+            z = iso6976_calcular_factor_compresion_suma_2016(comp, t_metering=t0, p_ref=p_ref)
+            vm_ideal = ISO6976_R_GAS_2016 * t0 / p_ref
             vm_real = iso6976_calcular_volumen_molar_real(vm_ideal, z)
             densidad_real = (mmix / 1000.0) / vm_real
             densidad_relativa = iso6976_calcular_densidad_relativa(
                 mmix, z, indice_temp_raw=indice_temp_raw_aire, p_ref=p_ref)
-            hm_bruto = iso6976_calcular_poder_calorifico_molar(
-                comp, "bruto", indice_temp_combustion=indice_hoj)
-            hm_neto = iso6976_calcular_poder_calorifico_molar(
-                comp, "neto", indice_temp_combustion=indice_hoj)
+            # [2026-10-05] tabla de poder calorifico de ISO 6976:2016 por temperatura de combustion
+            t_comb = 15.55 if etiqueta.startswith("60F") else float(etiqueta.split("/")[0])
+            hm_bruto = iso6976_calcular_pc_bruto_2016(comp, t_comb)
+            hm_neto = iso6976_calcular_pc_neto_2016(comp, t_comb)
             pcb_volumen = (hm_bruto / vm_real) / 1000.0
             pcn_volumen = (hm_neto / vm_real) / 1000.0
             wobbe = iso6976_calcular_indice_wobbe(pcb_volumen, densidad_relativa)
@@ -2795,7 +2857,8 @@ class App(tk.Tk):
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x", pady=(10, 0))
         self.gasvisc_result_vars = self._build_result_labels(
-            result_frame, ["viscosity"], {"viscosity": "Dynamic viscosity [Pa.s]"})
+            result_frame, ["viscosity", "viscosity_pas"],
+            {"viscosity": "Dynamic viscosity [cP]", "viscosity_pas": "Dynamic viscosity [Pa.s]"})
 
     def on_calcular_gasviscosity2004(self):
         try:
@@ -2814,7 +2877,9 @@ class App(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error de calculo", str(e))
             return
-        self.gasvisc_result_vars["viscosity"].set(f"{eta:.6f}")
+        # L-04: en cP con 6 decimales como FlowXpert (en Pa.s con 6 decimales solo quedaban 2 cifras).
+        self.gasvisc_result_vars["viscosity"].set(f"{eta * 1000.0:.6f}")
+        self.gasvisc_result_vars["viscosity_pas"].set(f"{eta:.6e}")
         # Advertencia informativa (NO bloqueante) si T/densidad quedan fuera del
         # rango de validez fisica OFICIAL del metodo (manual ABB SpiritIT):
         # 250-450 K (-23.15 a +176.85 degC), presion asociada hasta 30 MPa (no
@@ -2961,11 +3026,10 @@ class App(tk.Tk):
         etiquetas_resultado["k0"] = "K0 (constante de tabla, segun Product) [adimensional]"
         etiquetas_resultado["k1"] = "K1 (constante de tabla, segun Product) [adimensional]"
         etiquetas_resultado["k2"] = "K2 (constante de tabla, segun Product; 0 si no aplica) [adimensional]"
-        if auto_select_disponible:
-            claves_resultado.append("product_efectivo")
-            etiquetas_resultado["product_efectivo"] = (
-                "Product (selected) -- producto realmente usado cuando Product=\"Refined, "
-                "auto\" (1=Crude/3=Gasoline/4=Transition/5=Jet/6=FuelOil/7=Lube)")
+        # Salida "Product" de FlowXpert (L-03): siempre visible, con el nombre del producto usado
+        # (con "Refined, auto" es el que eligio el motor).
+        claves_resultado.append("product_efectivo")
+        etiquetas_resultado["product_efectivo"] = "Product"
 
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
@@ -3044,12 +3108,13 @@ class App(tk.Tk):
         alpha = r["alpha"]
         if st["alpha_convertir_a_c"]:
             alpha = alpha * 1.8
-        result_vars["alpha"].set(f"{alpha:.6f}")
-        result_vars["k0"].set(f"{r['k0']:.4f}")
-        result_vars["k1"].set(f"{r['k1']:.6f}")
-        result_vars["k2"].set(f"{r['k2']:.6f}")
-        if st.get("auto_select_disponible") and "product_efectivo" in result_vars:
-            result_vars["product_efectivo"].set(str(r.get("product_efectivo", "-")))
+        result_vars["alpha"].set(_fmt_redondeo_comercial(alpha, 6))
+        result_vars["k0"].set(_formato_flowxpert(r['k0']))
+        result_vars["k1"].set(_formato_flowxpert(r['k1']))
+        result_vars["k2"].set(_formato_flowxpert(r['k2']))
+        if "product_efectivo" in result_vars:
+            result_vars["product_efectivo"].set(
+                API_NOMBRE_PRODUCTO.get(r.get("product_efectivo", producto), str(r.get("product_efectivo", "-"))))
 
     _AYUDA_API_1980_COMUN = [
         "Motor API MPMS 11.1 / API-2540 / ASTM D1250 Adjunct, edicion 1980/1984. "
@@ -3351,21 +3416,16 @@ class App(tk.Tk):
     # localizadas pero NO decodificadas esta ronda) -- siguen bloqueadas,
     # ver el placeholder actualizado mas abajo.
     _AYUDA_API1952_METRICO_COMUN = [
-        "Tabla real de interpolacion CTL (API 1952, Table 53/54, sistema "
-        "metrico): no es una formula analitica, son los valores reales de la "
-        "tabla impresa del manual, interpolados en 2 ejes (temperatura en "
-        "pasos de 0.5°C, densidad en pasos de 5 kg/m3).",
-        "ADVERTENCIA REAL (hallazgo del proyecto, no oculto): la tabla interna "
-        "que usa el motor real para la pantalla 'API Table-53 (1952)' de la "
-        "app es DISTINTA de la que usa 'API Density @15°C (1952)' (aunque "
-        "ambas se llaman parecido). Esta pestaña esta validada contra el caso "
-        "real de 'API Density @15°C (1952)', no contra una prueba aislada de "
-        "'API Table-53 (1952)' -- tener ese matiz en cuenta si se compara "
-        "directo contra esa otra pantalla.",
-        "Validado contra un caso real completo (Density observada=1000 kg/m3, "
-        "T=25°C, P=20 bar(g), EVP=0): density_15c=1005.4817 (real 1005.482), "
-        "ctl=0.9935096 (real 0.993510), cpl=1.0010454 (real 1.001045) -- las "
-        "3 salidas dentro de ~0.00004% del valor real de la app.",
+        "Edicion 1952: los valores de la tabla impresa SON la norma (manual "
+        "Flow-X: \"The table values are the standard, so no calculations are "
+        "involved\"). Se lee la tabla directo, sin iterar, interpolando en 2 "
+        "ejes (temperatura en pasos de 0.5 °C, densidad en pasos de 1 o 5 kg/m3).",
+        "Table-53 usa su propia tabla (22 segmentos) y Table-54 la de 6 "
+        "segmentos; ambas validadas contra FlowXpert.xll (llamada directa) en "
+        "30000 puntos cada una: 0 diferencias en valor y en fuera de rango. "
+        "Los 3 casos del Excel de validacion coinciden con la app Android.",
+        "Fuera de la tabla, igual que FlowXpert: 'Calculation out of range' = 1, "
+        "Density @15°C = 0 (Table-53) o CTL = 1 (Table-54).",
         "'Density' de entrada: sin selector de unidad, siempre kg/m3 (mismo "
         "criterio que el resto de la familia 1980/2004).",
     ]
@@ -3375,7 +3435,7 @@ class App(tk.Tk):
                                       salida_principal_clave, salida_principal_label,
                                       boton_texto, ayuda_items=None,
                                       temp_tabla=None, temp_native="degC", temp_default=25.0,
-                                      temp_kwarg="observed_temp_c"):
+                                      temp_kwarg="observed_temp_c", formato_principal="{:.6f}"):
         if temp_tabla is None:
             temp_tabla = API_TEMPERATURA_A_DEGC
         scroll_parent = self._crear_frame_scrollable(parent)
@@ -3418,6 +3478,8 @@ class App(tk.Tk):
             etiquetas_resultado["principal"] = salida_principal_label
         claves_resultado.append("ctl")
         etiquetas_resultado["ctl"] = "CTL, Correction for Temperature on Liquid [adimensional]"
+        claves_resultado.append("fuera_de_rango")
+        etiquetas_resultado["fuera_de_rango"] = "Calculation out of range"
 
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
@@ -3430,6 +3492,7 @@ class App(tk.Tk):
             "temp_tabla_dict": dict(temp_tabla), "temp_kwarg": temp_kwarg,
             "result_vars": result_vars, "funcion": funcion,
             "salida_principal_clave": salida_principal_clave,
+            "formato_principal": formato_principal,
         }
 
     def _on_calcular_api1952_ctl_tabla(self, state_key):
@@ -3449,29 +3512,38 @@ class App(tk.Tk):
             messagebox.showerror("Error de calculo", str(e))
             return
         result_vars = st["result_vars"]
+        # Mismos decimales que muestra FlowXpert en cada pantalla.
         if st["salida_principal_clave"]:
-            result_vars["principal"].set(f"{r[st['salida_principal_clave']]:.6f}")
-        result_vars["ctl"].set(f"{r['ctl']:.7f}")
+            result_vars["principal"].set(st["formato_principal"].format(r[st["salida_principal_clave"]]))
+        result_vars["ctl"].set(f"{r['ctl']:.6f}")
+        fuera = r.get("fuera_de_rango", False)
+        result_vars["fuera_de_rango"].set("1: Out of range" if fuera else "0: In range")
+        if fuera:
+            messagebox.showwarning(
+                "Fuera de la tabla 1952",
+                "La combinacion de entrada y temperatura no esta cubierta por la tabla "
+                "de la norma.\nSe muestran los valores de respaldo del manual Flow-X "
+                "(valor base = 0 o CTL = 1); no son un resultado valido.")
 
     def _build_tab_api1952_table53(self, parent):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table53_1952",
             descripcion="API Table-53 (1952, metrico) -- Densidad OBSERVADA (a T) -> "
-                        "densidad a 15°C (iterativo). Tabla real de interpolacion "
-                        "(valores tabulados del manual, no una formula analitica).",
+                        "densidad a 15°C. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="Observed Density [kg/m3]", input_default=1000.0,
             funcion=api_table53_1952, input_kwarg="observed_density_kgm3",
             salida_principal_clave="density_15c", salida_principal_label="Density a 15°C [kg/m3]",
             boton_texto="Calcular (API Table-53, 1952)",
             temp_tabla=API_TEMPERATURA_A_DEGC, temp_native="degC", temp_default=25.0,
-            temp_kwarg="observed_temp_c")
+            temp_kwarg="observed_temp_c", formato_principal="{:.4f}")
 
     def _build_tab_api1952_table54(self, parent):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table54_1952",
             descripcion="API Table-54 (1952, metrico) -- Densidad a 15°C -> CTL a T "
-                        "observada (directo, sin iteracion). Tabla real de "
-                        "interpolacion (valores tabulados del manual).",
+                        "observada. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="Density @ 15°C [kg/m3]", input_default=1000.0,
             funcion=api_table54_1952, input_kwarg="density_15c_kgm3",
             salida_principal_clave=None, salida_principal_label=None,
@@ -3487,18 +3559,18 @@ class App(tk.Tk):
     # docstring RONDA 12 en normas/API_MPMS_Tables_1980_2004.py.
     # ------------------------------------------------------------------ #
     _AYUDA_API1952_US_COMUN = [
-        "Tabla real de interpolacion CTL del sistema US (1952) -- son los "
-        "valores reales de la tabla impresa del manual, no una formula "
-        "analitica.",
-        "Validacion: a T=60°F, CTL=1.0 exacto (Table-6/24) o el valor de "
-        "salida coincide con el de entrada (Table-5/23), en ambos casos "
-        "surge de los datos reales de la tabla, no esta forzado. Ademas, "
-        "Table-5/6 (eje °API) y Table-23/24 (eje RD) son 2 pares de tablas "
-        "independientes que describen la misma superficie fisica -- "
-        "coinciden en el CTL final a menos de 0.01% en 5 puntos (API, T) "
-        "distintos, evidencia cruzada fuerte.",
-        "PENDIENTE, no fabricado: todavia no hay un caso de esta pantalla "
-        "capturado en la app Android en vivo.",
+        "Edicion 1952 (sistema US): los valores de la tabla impresa SON la "
+        "norma (manual Flow-X: \"The table values are the standard, so no "
+        "calculations are involved\"). Cada pantalla lee SU tabla directo "
+        "(Table-5, 6, 23 y 24 son 4 tablas distintas), sin iterar.",
+        "Validado contra FlowXpert.xll (llamada directa) en 30000 puntos por "
+        "tabla: 0 diferencias en valor y en fuera de rango. Los 3 casos del "
+        "Excel de validacion coinciden con la app Android (0.0000 %).",
+        "Fuera de la tabla, igual que FlowXpert: 'Calculation out of range' = 1, "
+        "valor base = 0 (Table-5/23) o CTL = 1 (Table-6/24).",
+        "Limite conocido: con RD entre 0.51 y 0.60 la Table-23 del .xll se cae "
+        "(acceso a memoria invalido) en algunos puntos; ahi este motor no tiene "
+        "referencia contra la cual validar.",
         "'API Gravity'/'RD' de entrada: sin selector de unidad (mismo "
         "criterio que el resto de la familia). 'Temperature': selector "
         "degF/degC/K/R.",
@@ -3508,21 +3580,21 @@ class App(tk.Tk):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table5_1952",
             descripcion="API Table-5 (1952, sistema US) -- API Gravity OBSERVADA (a T) -> "
-                        "API Gravity a 60°F (iterativo). Tabla real de interpolacion "
-                        "(valores tabulados del manual).",
+                        "API Gravity a 60°F. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="Observed API Gravity [°API]", input_default=30.0,
             funcion=api_table5_1952, input_kwarg="observed_api",
             salida_principal_clave="api_60f", salida_principal_label="API Gravity a 60°F [°API]",
             boton_texto="Calcular (API Table-5, 1952)", ayuda_items=self._AYUDA_API1952_US_COMUN,
             temp_tabla=API_TEMPERATURA_A_DEGF, temp_native="degF", temp_default=90.0,
-            temp_kwarg="observed_temp_f")
+            temp_kwarg="observed_temp_f", formato_principal="{:.5f}")
 
     def _build_tab_api1952_table6(self, parent):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table6_1952",
             descripcion="API Table-6 (1952, sistema US) -- API Gravity a 60°F -> CTL a T "
-                        "observada (directo, sin iteracion). Tabla real de "
-                        "interpolacion (valores tabulados del manual).",
+                        "observada. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="API Gravity @ 60°F [°API]", input_default=30.0,
             funcion=api_table6_1952, input_kwarg="api_60f",
             salida_principal_clave=None, salida_principal_label=None,
@@ -3534,8 +3606,8 @@ class App(tk.Tk):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table23_1952",
             descripcion="API Table-23 (1952, sistema US) -- Relative Density OBSERVADA (a "
-                        "T) -> RD a 60°F (iterativo). Tabla real de interpolacion "
-                        "(valores tabulados del manual).",
+                        "T) -> RD a 60°F. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="Observed Relative Density (RD) [adimensional]", input_default=0.85,
             funcion=api_table23_1952, input_kwarg="observed_rd",
             salida_principal_clave="rd_60f",
@@ -3548,8 +3620,8 @@ class App(tk.Tk):
         self._build_tab_api1952_ctl_tabla(
             parent, state_key="table24_1952",
             descripcion="API Table-24 (1952, sistema US) -- Relative Density a 60°F -> CTL "
-                        "a T observada (directo, sin iteracion). Tabla real de "
-                        "interpolacion (valores tabulados del manual).",
+                        "a T observada. Lectura directa de la tabla de la norma "
+                        "(interpolacion lineal, sin iterar).",
             input_label="Relative Density (RD) @ 60°F [adimensional]", input_default=0.85,
             funcion=api_table24_1952, input_kwarg="rd_60f",
             salida_principal_clave=None, salida_principal_label=None,
@@ -3631,7 +3703,7 @@ class App(tk.Tk):
             "ctl": "CTL, Correction for Temperature on Liquid [adimensional]",
             "cpl": "CPL, Correction for Pressure on Liquid [adimensional]",
             "ctpl": "CTPL = CTL x CPL [adimensional]",
-            "f": "Factor de Compresibilidad F [1/kPa]",
+            "f": "Factor de Compresibilidad F [1/bar]",  # L-02: el valor siempre estuvo en 1/bar
         }
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
@@ -3943,11 +4015,10 @@ class App(tk.Tk):
             "k1": "K1 (constante de tabla, segun Product) [adimensional]",
             "k2": "K2 (constante de tabla, segun Product; 0 si no aplica) [adimensional]",
         }
-        if auto_select_disponible:
-            claves_resultado.append("product_efectivo")
-            etiquetas_resultado["product_efectivo"] = (
-                "Product (selected) -- producto realmente usado cuando Product=\"Refined, "
-                "auto\" (1=Crude/3=Gasoline/4=Transition/5=Jet/6=FuelOil/7=Lube)")
+        # Salida "Product" de FlowXpert (L-03): siempre visible, con el nombre del producto usado
+        # (con "Refined, auto" es el que eligio el motor).
+        claves_resultado.append("product_efectivo")
+        etiquetas_resultado["product_efectivo"] = "Product"
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
         result_vars = self._build_result_labels(result_frame, claves_resultado, etiquetas_resultado)
@@ -4010,12 +4081,13 @@ class App(tk.Tk):
         alpha = r["alpha"]
         if st["alpha_convertir_a_c"]:
             alpha = alpha * 1.8
-        result_vars["alpha"].set(f"{alpha:.6f}")
-        result_vars["k0"].set(f"{r['k0']:.4f}")
-        result_vars["k1"].set(f"{r['k1']:.6f}")
-        result_vars["k2"].set(f"{r['k2']:.6f}")
-        if st.get("auto_select_disponible") and "product_efectivo" in result_vars:
-            result_vars["product_efectivo"].set(str(r.get("product_efectivo", "-")))
+        result_vars["alpha"].set(_fmt_redondeo_comercial(alpha, 6))
+        result_vars["k0"].set(_formato_flowxpert(r['k0']))
+        result_vars["k1"].set(_formato_flowxpert(r['k1']))
+        result_vars["k2"].set(_formato_flowxpert(r['k2']))
+        if "product_efectivo" in result_vars:
+            result_vars["product_efectivo"].set(
+                API_NOMBRE_PRODUCTO.get(r.get("product_efectivo", producto), str(r.get("product_efectivo", "-"))))
 
     _AYUDA_API_WRAPPER_1980_COMUN = [
         "Combina el motor CTL de API Table-53/54 (metrico) o Table-5/6/23/24 (US), "
@@ -5048,8 +5120,10 @@ class App(tk.Tk):
             temp_c = st["temp_tabla_dict"][temp_unidad](float(st["temp_valor_var"].get()))
             presion_unidad = st["presion_unidad_var"].get()
             temp_f = temp_c * 1.8 + 32.0
+            # [CERTAIN, 2026-10-06] FlowXpert pasa bar -> psia con 1/0.0689476 (no 14.5037738): con esa constante los 6
+            # casos del libro 06 (etileno y propileno) coinciden al ultimo digito (antes etileno 1 y 3 diferian 1-7e-5).
             presion_psia = st["presion_tabla_dict"][presion_unidad](
-                float(st["presion_valor_var"].get()))
+                float(st["presion_valor_var"].get())) * (_PSI_A_KPA / 100.0) / GPA_TP15_BAR_POR_PSI
             api_rounding = 1 if st["api_rounding_var"].get() else 0
         except ValueError as e:
             messagebox.showerror("Entrada invalida", f"Revisa los valores numericos.\n{e}")
@@ -5170,7 +5244,7 @@ class App(tk.Tk):
                                 wraplength=230)
         p100_label.grid(row=fila, column=0, sticky="w", pady=3)
         p100_valor_var, p100_unidad_var, p100_tabla_dict = self._agregar_fila_presion(
-            izq, fila, API_PRESION_ABS_A_PSIA, valor_default=100.0)
+            izq, fila, API_PRESION_ABS_A_PSIA, valor_default=6.89476)  # 100 psia en bar(a), unidad default de la fila
         p100_valor_row_frame = izq.grid_slaves(row=fila, column=1)[0]
         fila += 1
 
@@ -5227,8 +5301,12 @@ class App(tk.Tk):
             temp_unidad = st["temp_unidad_var"].get()
             t_f = st["temp_tabla_dict"][temp_unidad](float(st["temp_valor_var"].get()))
             p100_unidad = st["p100_unidad_var"].get()
-            p100_valor_psia = st["p100_tabla_dict"][p100_unidad](
-                float(st["p100_valor_var"].get()))
+            if p100_unidad.startswith("bar"):
+                # [2026-10-06] factor de FlowXpert para esta pantalla: 0.0689476 bar/psi (3 de 3 capturas exactas)
+                p100_valor_psia = float(st["p100_valor_var"].get()) / GPA_TP15_BAR_POR_PSI
+            else:
+                p100_valor_psia = st["p100_tabla_dict"][p100_unidad](
+                    float(st["p100_valor_var"].get()))
         except ValueError as e:
             messagebox.showerror("Entrada invalida", f"Revisa los valores numericos.\n{e}")
             return
@@ -5506,15 +5584,21 @@ class App(tk.Tk):
         st["status_var"].set("")
         for clave, base_map in st["valor_vars"].items():
             for base_nombre, resultado in (("wet", r.wet), ("dry", r.dry), ("sat", r.sat)):
-                base_map[base_nombre].set(f"{getattr(resultado, clave):.6g}")
+                # [C-30] formato real de la pantalla de FlowXpert (ver _formato_flowxpert); explica tanto los
+                # campos "de 7 cifras" (17774.95, 1012.001) como el GHV en Btu/lbm que parecia truncado
+                # (22294.4988 -> "22294.499" -> "22294.49").
+                base_map[base_nombre].set(_formato_flowxpert(getattr(resultado, clave)))
 
     def _actualizar_resultado_gpa_tp15(self, *_args):
         st = getattr(self, "_gpa_tp15_state", None)
         if not st or st.get("ultimo_evp_psia") is None:
             return
         unidad = st["evp_out_unidad_var"].get()
-        factor_psia_por_unidad = st["p100_tabla_dict"][unidad](1.0)
-        valor_en_unidad = st["ultimo_evp_psia"] / factor_psia_por_unidad
+        if unidad.startswith("bar"):
+            valor_en_unidad = st["ultimo_evp_psia"] * GPA_TP15_BAR_POR_PSI
+        else:
+            factor_psia_por_unidad = st["p100_tabla_dict"][unidad](1.0)
+            valor_en_unidad = st["ultimo_evp_psia"] / factor_psia_por_unidad
         st["evp_valor_var"].set(f"{valor_en_unidad:.6f}")
         st["range_status_var"].set("Out of range" if st["ultimo_oor"] else "")
 
@@ -5816,7 +5900,9 @@ class App(tk.Tk):
         else:
             st["status_var"].set("")
         st["rd60_var"].set(f"{r['rd60']:.6f}")
-        st["f_var"].set(f"{r['compressibility']:.6f}")
+        # [CERTAIN, 2026-10-06] 9 decimales, como la F de las demas pantallas API: con 6 decimales en 1/psi solo quedaban
+        # 2 cifras (0.000014) y no se podia comparar con FlowXpert (0.002014 1/MPa = 0.000013886 1/psi).
+        st["f_var"].set(f"{r['compressibility']:.9f}")
         st["ctl_var"].set(f"{r['ctl']:.6f}")
         st["cpl_var"].set(f"{r['cpl']:.6f}")
         st["astm_range_var"].set("ASTM Range Status: Out of range" if r["astm_oor"] else "")

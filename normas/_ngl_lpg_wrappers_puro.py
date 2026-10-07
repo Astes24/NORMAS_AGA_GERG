@@ -635,22 +635,322 @@ def _forward_rd60f(rd_base: float, t_f: float, p_psia: float, atm_psia: float,
     # de entrada no se corrige antes de llegar aqui. Validado [CERTAIN]
     # contra el oraculo `.xll` (ver `_sweep_ngl_lpg_puro_ronda42.py`).
     if rd_base < MPMS_11_2_2_RD_RANGE[1]:
-        cpl_res = api_mpms_11_2_2(rd_base, t_f, p_psig, evp_psig)
+        cpl_res = api_mpms_11_2_2(rd_base, t_f, p_psig, evp_psig, rounding=round_11_2_2)
     else:
         api_gravity_base = 141.5 / rd_base - 131.5
-        cpl_res = api_mpms_11_2_1(api_gravity_base, t_f, p_psig, evp_psig)
+        cpl_res = api_mpms_11_2_1(api_gravity_base, t_f, p_psig, evp_psig, rounding=round_11_2_2)
     cpl, f, oor_cpl = cpl_res["cpl"], cpl_res["f"], cpl_res["fuera_de_rango_oficial"]
-    if round_11_2_2:
-        # [CERTAIN esta ronda] CPL a 4 decimales -- F NO se redondea aqui,
-        # ver docstring de `calcular_rd60f_ngl_lpg_puro` para la evidencia
-        # de por que el redondeo de F es un PENDIENTE honesto (no un
-        # descuido).
-        cpl = _round_n(cpl, 4)
+    # [C-29, 2026-10-06, CERTAIN contra el oraculo .xll] "API-11.2.2 Rounding" se pasa al NUCLEO
+    # (FUN_1800E8E88 lo entrega como argumento a FUN_1800e32e8 / FUN_1800e2d5c): el nucleo redondea
+    # entradas, F y (solo 11.2.2) CPL a 4 decimales. La rama 11.2.1 (RD >= 0.638) NO redondea CPL,
+    # por eso aqui ya no se redondea CPL por fuera del nucleo. Resuelve P-04 (F mostrada).
 
     valor_obs = rd_base * ctl * cpl
     return {"valor_obs": valor_obs, "ctl": ctl, "cpl": cpl, "f": f,
             "evp_psia": evp_psia, "oor_ctl": oor_ctl, "oor_cpl": oor_cpl,
             "oor_evp": oor_evp}
+
+
+# ===========================================================================
+# [C-29, 2026-10-06] SOLVER ITERATIVO REAL DE FLOWXPERT (conversion=1, Observed->Standard)
+# Port directo del decompilado (ANALISIS_GHIDRA_FLOWXPERT/ghidra_ngllpg_xll_output.txt):
+#   FUN_1800eab2c (x de la densidad observada), FUN_1800e6ca0 / FUN_1800e7304 (Dens15C / Dens20C,
+#   rama *param_11 == 1) y FUN_1800e8e88 (RD60F, rama param_11 == 1 + respaldo por intervalo).
+# Validado contra el oraculo FlowXpert.xll (barrido de flags, P, EVP, T y densidad, incluida la rama
+# 11.2.1): Dens15C 1778/1778 y Dens20C 1774/1774 exactos (1e-9 relativo en todos los campos);
+# RD60F 2558/2560 (los 2 restantes: rd_std 1.5e-8 relativo, CPL escalonado del nucleo 11.2.2 cerca
+# de la tolerancia 1e-8). El solver anterior (punto fijo con tablas 53E/59E y biseccion) quedaba
+# exacto en 236/666 (Dens15C) y 257/576 (RD60F) casos sin flags de redondeo.
+# ===========================================================================
+_FX_TOL_DEFECTO = 1.0e-5          # DAT_180193de8
+_FX_TOL_R22 = 0.05                # DAT_180193e90
+_FX_TOL_TP15 = 0.005              # DAT_1801e0b78
+_FX_RD_TOL_DEFECTO = 1.0e-8       # DAT_180193dc0
+_FX_RD_TOL_R22 = 5.0e-5           # DAT_1801eaa40
+_FX_RD_TOL_TP15 = 5.0e-6          # DAT_1801ea3b8
+_FX_DBL_EPS = 2.220446049250313e-16   # DAT_1801eaa28 (deteccion de ciclo, FUN_1800e99b4)
+
+
+def _ngl_sat(fila, temp_k):
+    """Termino de saturacion de una fila de NGL_LPG_TABLE (inline en FUN_1800eab2c); None si T > Tc."""
+    tr = temp_k / fila[1]
+    if tr > 1.0:
+        return None, tr
+    y = 1.0 - tr
+    return ((y * y * fila[6] + math.pow(y, 0.35) * fila[4] + y * y * y * fila[7]) /
+            (math.pow(y, 0.65) * fila[5] + 1.0) + 1.0) * fila[3], tr
+
+
+def _ngl_solve_x_fx(objetivo, temp_k):
+    """Port de FUN_1800eab2c: x (densidad relativa reducida) con x*alpha(x,T) = objetivo.
+    Devuelve (x, alpha, fuera_de_rango). alpha es el del ULTIMO punto de prueba (asi lo deja el binario
+    en *param_4) y x = objetivo/alpha."""
+    from .API_MPMS_Tables_1980_2004 import NGL_LPG_TABLE as tabla
+    t60 = (60.0 + 459.67) / 1.8
+    trs, vals, i9 = [], [], -1
+    for i, fila in enumerate(tabla):
+        s, tr = _ngl_sat(fila, temp_k)
+        trs.append(tr)
+        s60, _ = _ngl_sat(fila, t60)
+        if s60 is None:
+            s60 = -1.0
+        if tr <= 1.0:
+            v = (s / s60) * fila[0]
+            if v >= 0.0 and i9 == -1 and objetivo < v:
+                i9 = i
+        else:
+            v = -1.0
+        vals.append(v)
+    if i9 == -1:
+        lo, hi = 10, 11
+    elif i9 == 0:
+        lo, hi = 0, 1
+    else:
+        lo, hi = i9 - 1, i9
+    f_hi, f_lo = vals[hi], vals[lo]
+    x_hi, x_lo = tabla[hi][0], tabla[lo][0]
+    b4 = trs[lo] > 1.0
+    if b4:
+        x_lo = ((temp_k - tabla[lo][1]) / (tabla[hi][1] - tabla[lo][1])) * (x_hi - x_lo) + x_lo
+    b5 = x_lo < 0.35
+    if b5:
+        x_lo = 0.35
+    oor = False
+    if b5 or b4:
+        a, o = _ngl_alpha(x_lo, temp_k)
+        oor |= o
+        f_lo = x_lo * a
+    if objetivo < f_lo or f_hi < objetivo:
+        oor = True
+    n = 0
+    while True:
+        n += 1
+        if f_lo <= -1.0:
+            x2 = (x_lo + x_hi) * 0.5
+        else:
+            if f_hi - f_lo == 0.0:
+                r = 0.0
+            else:
+                r = (objetivo - f_lo) / (f_hi - f_lo)
+                if abs(r) < 0.001:
+                    r = 0.001 if r >= 0.0 else -0.001
+                if abs(r) > 0.999:
+                    r = 0.999 if r >= 0.0 else -0.999
+            x2 = (x_hi - x_lo) * r + x_lo
+        a2, o = _ngl_alpha(x2, temp_k)
+        oor |= o
+        f2 = x2 * a2
+        d16 = f2 - f_lo
+        if d16 < 1e-8 and f_lo <= objetivo <= f2:
+            return objetivo / a2, a2, oor
+        l290 = f_hi - f2
+        if l290 < 1e-8 and f2 <= objetivo <= f_hi:
+            return objetivo / a2, a2, oor
+        l298 = x2 - x_lo
+        d20 = f_hi * f_hi - f_lo * f_lo
+        d19 = (f_hi - f_lo) / d16
+        d21 = ((x_hi - x_lo) - d19 * l298) / (d20 - (f2 * f2 - f_lo * f_lo) * d19)
+        d19 = ((x_hi - x_lo) - d21 * d20) / (f_hi - f_lo)
+        x3 = ((x_lo - d19 * f_lo) - d21 * f_lo * f_lo) + objetivo * d21 * objetivo + objetivo * d19
+        if (not b5 and not b4) and x3 < x_lo:
+            x3 = ((objetivo - f_lo) * l298) / d16 + x_lo
+        if x_hi < x3:
+            x3 = ((objetivo - f2) * (x_hi - x2)) / l290 + x2
+        a3, o = _ngl_alpha(x3, temp_k)
+        oor |= o
+        f3 = x3 * a3
+        if abs(f3 - objetivo) < 1e-8:
+            return objetivo / a3, a3, oor
+        if n > 19:
+            raise ArithmeticError("FUN_1800eab2c sin convergencia (codigo 0x2d de FlowXpert)")
+        if f3 <= objetivo:
+            x_lo, f_lo = x3, f3
+            if objetivo < f2:
+                x_hi, f_hi = x2, f2
+        else:
+            x_hi, f_hi = x3, f3
+            if f2 < objetivo:
+                x_lo, f_lo = x2, f2
+
+
+def _dens_iter_fx(densidad_kgm3, t_c, p_barg, *, round_11_2_4, round_11_2_2m, evp_mode, evp_input_barg,
+                  round_tp15, p100_correlacion, p100_valor_barg, t_ref_c, tol=None):
+    """Rama iterativa de FUN_1800e6ca0 (t_ref_c=15) / FUN_1800e7304 (t_ref_c=20). Arranca con CPL=1;
+    cada vuelta: x de rho/CPL a T (FUN_1800eab2c), CTL con alpha a T_ref, EVP (TP-15 con x), CPL con
+    la densidad a 15 C (Dens15C pasa a 11.2.1M si >= 637.5 kg/m3; Dens20C siempre 11.2.2M) y candidato
+    rho/CTL/CPL; convergencia de FUN_1800e99b4 (historial de 100, corte por ciclo)."""
+    rho, t_ctl = densidad_kgm3, t_c
+    if round_11_2_4:
+        rho = _round_n(densidad_kgm3, 1)
+        t_ctl = _round_n(t_c * 2.0, 1) * 0.5
+    t_k = t_ctl + 273.15
+    t_f = (t_c * 1.8 + 491.67) - 459.67
+    p100_psia = p100_valor_barg / 0.06894757
+    if tol is None:
+        tol = _FX_TOL_DEFECTO
+        if round_11_2_2m and p_barg != 0.0:
+            tol = _FX_TOL_R22
+        elif evp_mode == 2 and round_tp15:
+            tol = _FX_TOL_TP15
+    evp_barg = evp_input_barg
+    ctl, cpl, f = 1.0, 1.0, 0.0
+    oor_ctl = oor_cpl = oor_evp = False
+    historial = []
+    while True:
+        d3 = rho / cpl
+        x_obs = d3 / RHO_WATER_NGL_LPG_KGM3
+        oor_ctl = not (0.21 <= x_obs + 1e-8 and x_obs - 1e-8 < 0.74
+                       and 227.15 <= t_k + 1e-8 and t_k - 1e-8 <= 366.15)
+        x, _a, o1 = _ngl_solve_x_fx(x_obs, t_k)
+        a_ref, o2 = _ngl_alpha(x, t_ref_c + 273.15)
+        oor_ctl = bool(oor_ctl or o1 or o2)
+        ctl = d3 / (a_ref * x * RHO_WATER_NGL_LPG_KGM3)
+        if evp_mode == 2:
+            evp_psia, oor_evp = _gpa_tp15_psia(x, t_f, round_tp15, p100_correlacion, p100_psia)
+            evp_barg = evp_psia * PSI_TO_KPA / BAR_TO_KPA if evp_psia is not None else float("nan")
+        if t_ref_c == T_REF_NGL_15C_C:
+            d15 = a_ref * x * RHO_WATER_NGL_LPG_KGM3
+            usar_1121m = d15 >= MPMS_11_2_2M_RHO_RANGE[1]
+        else:
+            a15, _ = _ngl_alpha(x, T_REF_NGL_15C_C + 273.15)
+            d15 = a15 * x * RHO_WATER_NGL_LPG_KGM3
+            usar_1121m = False
+        if usar_1121m:
+            r = api_mpms_11_2_1m(d15, t_c, p_barg, evp_barg, rounding=round_11_2_2m)
+        else:
+            r = api_mpms_11_2_2m(d15, t_c, p_barg, evp_barg, rounding=round_11_2_2m)
+        cpl, f, oor_cpl = r["cpl"], r["f"], r["fuera_de_rango_oficial"]
+        candidato = rho / ctl / cpl
+        if len(historial) >= 100:
+            raise ArithmeticError("Dens NGL/LPG sin convergencia en 100 vueltas (codigo 0x2d de FlowXpert)")
+        diff = abs(candidato - historial[-1]) if historial else abs(candidato)
+        if diff < tol:
+            break
+        if any(abs(h - candidato) < _FX_DBL_EPS for h in historial):
+            break
+        historial.append(candidato)
+    x_out = _round_n(candidato, 1) if round_11_2_4 else candidato
+    return {"x_kgm3": x_out, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "compressibility_1_bar": f,
+            "evp_barg": evp_barg, "oor_ctl": oor_ctl, "oor_cpl": bool(oor_cpl), "oor_evp": bool(oor_evp)}
+
+
+def _rd60f_iter_fx(rd, t_f, p_psia, *, round_11_2_4, round_11_2_2, evp_mode, evp_input_psia, round_tp15,
+                   p100_correlacion, p100_valor_psia, atm_psia, tol=None):
+    """Rama iterativa de FUN_1800e8e88: punto fijo (CTL por FUN_1800ec020 sin rounding o, con 11.2.4,
+    FUN_1800eab2c sobre RD*CTL anterior con RD/T redondeados) con corte por oscilacion/divergencia y,
+    si no converge, busqueda de intervalo (paso 0.005) + regula falsi sobre la evaluacion directa."""
+    rdv, tv = rd, t_f
+    if round_11_2_4:
+        rdv, tv = _round_n(rd, 4), _round_n(t_f, 1)
+    if tol is None:
+        tol = _FX_RD_TOL_DEFECTO
+        if round_11_2_2 and p_psia != 0.0:
+            tol = _FX_RD_TOL_R22
+        elif evp_mode == 2 and round_tp15:
+            tol = _FX_RD_TOL_TP15
+    ctl, cpl, f, evp = 1.0, 1.0, 0.0, evp_input_psia
+    oor_ctl = oor_cpl = oor_evp = False
+    cand, prev_ad, prev_d, n, cambios, crece = rdv, 1000.0, 0.0, 0, 0, 0
+    resultado = None
+    nuevo = rdv
+    while True:
+        if not round_11_2_4:
+            t_k = (t_f + 459.67) / 1.8
+            ctl, o = _ngl_alpha(cand, t_k)
+            x = cand
+            o = o or not (0.35 <= cand + 1e-8 and cand - 1e-8 <= 0.688)
+        else:
+            t_k = (tv + 459.67) / 1.8
+            obs = cand * ctl
+            x, ctl, o = _ngl_solve_x_fx(obs, t_k)
+            o = o or not (0.2099999 <= obs + 1e-8 and obs - 1e-8 <= 0.7400001)
+        oor_ctl = bool(o or not (227.15 <= t_k + 1e-8 and t_k - 1e-8 <= 366.15)
+                       or x + 1e-8 < 0.35 or 0.688 < x - 1e-8)
+        if evp_mode == 2:
+            e, oor_evp = _gpa_tp15_psia(x, t_f, round_tp15, p100_correlacion, p100_valor_psia)
+            evp = e if e is not None else float("nan")
+        else:
+            evp = evp_input_psia
+        if x < MPMS_11_2_2_RD_RANGE[1]:
+            r = api_mpms_11_2_2(x, t_f, p_psia - atm_psia, evp - atm_psia, rounding=round_11_2_2)
+        else:
+            r = api_mpms_11_2_1(141.5 / x - 131.5, t_f, p_psia - atm_psia, evp - atm_psia,
+                                rounding=round_11_2_2)
+        cpl, f, oor_cpl = r["cpl"], r["f"], r["fuera_de_rango_oficial"]
+        n += 1
+        nuevo = rdv / ctl / cpl
+        if n > 100:
+            break
+        d = nuevo - cand
+        ad = abs(d)
+        if ad < tol:
+            resultado = nuevo
+            break
+        if d * prev_d >= 0.0:
+            cambios = 0
+        else:
+            cambios += 1
+            if n > 10 and cambios > 10:
+                break
+        if ad > prev_ad:
+            crece += 1
+            if n > 10 and crece > 5:
+                break
+        cand, prev_ad, prev_d = nuevo, ad, d
+    if resultado is None:
+        kw = dict(t_f=t_f, p_psia=p_psia, round_11_2_4=round_11_2_4, round_11_2_2=round_11_2_2,
+                  evp_mode=evp_mode, evp_input_psia=evp_input_psia, round_tp15=round_tp15,
+                  p100_correlacion=p100_correlacion, p100_valor_psia=p100_valor_psia, atm_psia=atm_psia,
+                  conversion=0)
+
+        def directo(v):
+            return calcular_rd60f_ngl_lpg_puro(v, **kw)
+
+        ultimo = directo(nuevo)
+        lo = hi = nuevo
+        f_lo = f_hi = ultimo["rd_std"]
+        if f_lo <= rd:
+            while True:
+                hi += 0.005
+                if hi >= 2.0:
+                    break
+                ultimo = directo(hi)
+                f_hi = ultimo["rd_std"]
+                if f_hi > rd:
+                    break
+        else:
+            while True:
+                lo -= 0.005
+                if lo <= 0.1:
+                    break
+                ultimo = directo(lo)
+                f_lo = ultimo["rd_std"]
+                if f_lo < rd:
+                    break
+        if not ((f_hi - rd) * (f_lo - rd) < 0.0):
+            raise ArithmeticError("RD60F NGL/LPG sin intervalo de solucion (codigo 0x2d de FlowXpert)")
+        for _ in range(100):
+            dx = hi - lo
+            xm = hi - (f_hi - rd) * dx / (f_hi - f_lo)
+            if xm < dx * 0.1 + lo or dx * 0.9 + lo < xm:
+                xm = (hi + lo) * 0.5
+            ultimo = directo(xm)
+            fm = ultimo["rd_std"]
+            if (f_hi - rd) * (fm - rd) >= 0.0:
+                f_hi, hi = fm, xm
+            else:
+                f_lo, lo = fm, xm
+            if hi - lo < tol:
+                resultado = xm
+                break
+        else:
+            raise ArithmeticError("RD60F NGL/LPG sin convergencia (codigo 0x2d de FlowXpert)")
+        ctl, cpl, f, evp = ultimo["ctl"], ultimo["cpl"], ultimo["compressibility_1_psi"], ultimo["evp_psia"]
+        oor_ctl, oor_cpl, oor_evp = ultimo["oor_ctl"], ultimo["oor_cpl"], ultimo["oor_evp"]
+    if round_11_2_4:
+        resultado = _round_n(resultado, 4)
+    return {"rd_std": resultado, "ctl": ctl, "cpl": cpl, "ctpl": cpl * ctl, "compressibility_1_psi": f,
+            "evp_psia": evp, "oor_ctl": bool(oor_ctl), "oor_cpl": bool(oor_cpl), "oor_evp": bool(oor_evp)}
 
 
 def calcular_rd60f_ngl_lpg_puro(
@@ -706,16 +1006,8 @@ def calcular_rd60f_ngl_lpg_puro(
     inline, nunca `FUN_1800ec020`), que ya tenia su propio mecanismo
     validado (redondeo del resultado final a 4 decimales) -- mezclar ambos
     fabricaria un comportamiento no visto en el binario."""
-    if tol is None:
-        if round_11_2_2:
-            tol_efectivo = 0.00005
-        elif round_tp15:
-            tol_efectivo = 0.000005
-        else:
-            tol_efectivo = 1e-8
-    else:
-        tol_efectivo = tol
-
+    # [C-29] la tolerancia dinamica (5e-5 / 5e-6 / 1e-8) vive ahora en `_rd60f_iter_fx` (unica rama
+    # que itera); `tol` explicito se le pasa tal cual.
     if conversion == 0:
         rd_base = rd
         res = _forward_rd60f(rd_base, t_f, p_psia, atm_psia, evp_mode,
@@ -724,21 +1016,11 @@ def calcular_rd60f_ngl_lpg_puro(
                               round_11_2_4=round_11_2_4)
         rd_std = res["valor_obs"]
     else:
-        rd_base = rd
-        res = None
-        for _ in range(max_iter):
-            res = _forward_rd60f(rd_base, t_f, p_psia, atm_psia, evp_mode,
-                                  evp_input_psia, round_tp15, p100_correlacion,
-                                  p100_valor_psia, round_11_2_2)
-            ctpl = res["ctl"] * res["cpl"]
-            nuevo = rd / ctpl if ctpl not in (0.0,) and ctpl == ctpl else rd_base
-            if abs(nuevo - rd_base) < tol_efectivo:
-                rd_base = nuevo
-                break
-            rd_base = nuevo
-        rd_std = rd_base
-        if round_11_2_4:
-            rd_std = _round_n(rd_std, 4)
+        # [C-29] solver real de FlowXpert (FUN_1800e8e88, rama param_11 == 1)
+        return _rd60f_iter_fx(rd, t_f, p_psia, round_11_2_4=round_11_2_4, round_11_2_2=round_11_2_2,
+                              evp_mode=evp_mode, evp_input_psia=evp_input_psia, round_tp15=round_tp15,
+                              p100_correlacion=p100_correlacion, p100_valor_psia=p100_valor_psia,
+                              atm_psia=atm_psia, tol=tol)
 
     ctpl = res["ctl"] * res["cpl"]
     return {
@@ -875,17 +1157,14 @@ def _forward_densxc(density_base_kgm3: float, t_c: float, p_barg: float,
     # esta ronda (el bug reportado y reproducido es exclusivo de
     # `conversion=0`, ver docstring del modulo, seccion RONDA 42).
     if permitir_switch_1121m and density_15c_kgm3 >= MPMS_11_2_2M_RHO_RANGE[1]:
-        cpl_res = api_mpms_11_2_1m(density_15c_kgm3, t_c, p_barg, evp_barg)
+        cpl_res = api_mpms_11_2_1m(density_15c_kgm3, t_c, p_barg, evp_barg, rounding=round_11_2_2m)
     else:
-        cpl_res = api_mpms_11_2_2m(density_15c_kgm3, t_c, p_barg, evp_barg)
+        cpl_res = api_mpms_11_2_2m(density_15c_kgm3, t_c, p_barg, evp_barg, rounding=round_11_2_2m)
     cpl, f, oor_cpl = cpl_res["cpl"], cpl_res["f"], cpl_res["fuera_de_rango_oficial"]
-    if round_11_2_2m:
-        # [CERTAIN esta ronda, confirmado exacto contra el oraculo `.xll`]
-        # CPL a 4 decimales -- el CPL redondeado es el que alimenta
-        # `densidad_obs`/el siguiente candidato del solver. F NO se
-        # redondea aqui -- ver docstring de `calcular_dens15c_ngl_lpg_puro`
-        # para la evidencia de por que eso queda PENDIENTE (no un descuido).
-        cpl = _round_n(cpl, 4)
+    # [C-29, 2026-10-06, CERTAIN contra el oraculo .xll] "API-11.2.2M Rounding" se pasa al NUCLEO
+    # (FUN_1800e6ca0/FUN_1800e7304 lo entregan como argumento a FUN_1800e36e8 / FUN_1800e303c): el
+    # nucleo redondea entradas, F y (solo 11.2.2M) CPL a 4 decimales. La rama 11.2.1M (densidad a 15 C
+    # >= 637.5 kg/m3, solo Dens20C) NO redondea CPL. Resuelve P-04 (F mostrada).
 
     densidad_obs = density_base_kgm3 * ctl * cpl
     return {"valor_obs": densidad_obs, "ctl": ctl, "cpl": cpl, "f": f,
@@ -915,25 +1194,9 @@ def _dens_ngl_lpg_puro(densidad_kgm3: float, t_c: float, p_barg: float, *,
     `conversion=0` -- pasado en `True` UNICAMENTE por
     `calcular_dens20c_ngl_lpg_puro`, ver docstring del modulo."""
     p100_valor_psia = p100_valor_barg * BAR_TO_KPA / PSI_TO_KPA
-    evp_input_psia = evp_input_barg * BAR_TO_KPA / PSI_TO_KPA
 
-    # [RONDA 33, cruce contra manual] tolerancia de convergencia DINAMICA,
-    # literal segun `fxAPI_Dens15C_NGL_LPG`/`fxAPI_Dens20C_NGL_LPG`: 0.05
-    # kg/m3 si `round_11_2_2m` esta activo, si no 0.005 si `round_tp15` esta
-    # activo, si no 0.00001 (=1e-5) -- ANTES de esta ronda se usaba un `tol`
-    # fijo (1e-6, mas estricto que el 1e-5 del manual mas ningun otro caso)
-    # sin importar los flags; con flags=0 (default de los 4 casos reales
-    # conocidos y del barrido existente) el resultado final no cambia --
-    # una tolerancia mas estricta converge al MISMO punto fijo, solo con mas
-    # vueltas.
-    tol_efectivo = tol
-    if tol is None:
-        if round_11_2_2m:
-            tol_efectivo = 0.05
-        elif round_tp15:
-            tol_efectivo = 0.005
-        else:
-            tol_efectivo = 0.00001
+    # [C-29] la tolerancia dinamica (0.05 / 0.005 / 1e-5 kg/m3, condicion real del binario: 0.05 solo si
+    # 11.2.2M Rounding y P != 0; 0.005 solo si EVP calculada y TP-15 Rounding) vive en `_dens_iter_fx`.
 
     if conversion == 0:
         density_base = densidad_kgm3
@@ -944,53 +1207,11 @@ def _dens_ngl_lpg_puro(densidad_kgm3: float, t_c: float, p_barg: float, *,
                                permitir_switch_1121m=permitir_switch_1121m_directo)
         x_out = res["valor_obs"]
     else:
-        # Estimacion inicial de CPL evaluando en el propio valor observado
-        # (guess razonable) -- IMPRESCINDIBLE hacerlo ANTES del bucle: si se
-        # arranca con cpl=1.0 "a ciegas" (en vez de este estimado), el primer
-        # candidato coincide casi siempre con el valor observado de entrada
-        # cuando T_obs~=T_ref (CTL~=1 ahi), lo que provoca una "convergencia"
-        # falsa en la primerisima vuelta -- se detecta ANTES de aplicar CPL
-        # siquiera una vez, dando resultados sistematicamente sin la
-        # correccion de presion. Hallazgo de esta ronda (barrido inicial:
-        # 91.8%/100% en evp_mode=1 para Dens15C/Dens20C escondia este bug en
-        # los casos T_obs~T_ref con presion>0 -- ver ejemplos en
-        # `_sweep_ngl_lpg_puro.py`).
-        density_base = densidad_kgm3
-        res = _forward_densxc(density_base, t_c, p_barg, evp_mode,
-                               evp_input_barg, round_tp15, p100_correlacion,
-                               p100_valor_psia, t_ref_c, tabla_forward,
-                               round_11_2_2m)
-        for _ in range(max_iter):
-            working_target = densidad_kgm3 / res["cpl"] if res["cpl"] else densidad_kgm3
-            r_inv = tabla_inversa(working_target, t_c)
-            density_base_candidato = r_inv["density_15c"] if "density_15c" in r_inv \
-                else r_inv["density_20c"]
-            res = _forward_densxc(density_base_candidato, t_c, p_barg, evp_mode,
-                                   evp_input_barg, round_tp15, p100_correlacion,
-                                   p100_valor_psia, t_ref_c, tabla_forward,
-                                   round_11_2_2m)
-            # ctl reportado: relativo al 'working_target' (dividiendo CPL ya
-            # aplicado en vueltas previas), igual que el decompilado real.
-            res["ctl"] = (working_target / density_base_candidato
-                          if density_base_candidato else 0.0)
-            convergio = abs(density_base_candidato - density_base) < tol_efectivo
-            density_base = density_base_candidato
-            if convergio:
-                break
-        x_out = density_base
-        if round_11_2_4:
-            # [RONDA 33] paso 14 del manual (`fxAPI_Dens15C_NGL_LPG`):
-            # "If API 11.2.4 rounding is enabled, then the density at [15C,
-            # equilibrium pressure] is rounded to 0.1" -- identico para
-            # Dens20C con su propia referencia. Solo aplica en `conversion=1`
-            # (Observed->Standard).
-            # [RONDA 41] En `conversion=0` (Standard->Observed) round_11_2_4
-            # SI tiene efecto -- RONDA 33 asumio lo contrario por ambiguedad
-            # del manual; corregido pasando el flag a `tabla_forward` dentro
-            # de `_forward_densxc` (ver docstring de esa funcion), NO con un
-            # redondeo del resultado final aqui (serian 2 mecanismos
-            # distintos confirmados por decompilacion, no uno solo).
-            x_out = _round_n(x_out, 1)
+        # [C-29] solver real de FlowXpert (FUN_1800e6ca0 / FUN_1800e7304, rama *param_11 == 1)
+        return _dens_iter_fx(densidad_kgm3, t_c, p_barg, round_11_2_4=round_11_2_4,
+                             round_11_2_2m=round_11_2_2m, evp_mode=evp_mode, evp_input_barg=evp_input_barg,
+                             round_tp15=round_tp15, p100_correlacion=p100_correlacion,
+                             p100_valor_barg=p100_valor_barg, t_ref_c=t_ref_c, tol=tol)
 
     ctpl = res["ctl"] * res["cpl"]
     return {

@@ -719,6 +719,7 @@ de aceptar los resultados, no ocultar una discrepancia.
 
 from .ISO_6976 import (  # noqa: F401
     ORDEN_COMPONENTES_APP,
+    CONTEO_ATOMICO,
     TABLA_CONSTANTES,
     R_GAS,
     M_AIRE,
@@ -775,7 +776,38 @@ BAIR_INDEX_POR_INDICE_1995 = {1: 2, 2: 1, 3: 1, 4: 1, 5: 4, 6: 4}
 # 2/2 dentro de cada metering] indice bj (columna de TABLA_CONSTANTES) por
 # indice real a2 (1..6), calibrado con datos PROPIOS de
 # PropertiesISO6976_1995_rev1 (ya no por analogia con 2016_M).
-INDICE_BJ_POR_INDICE_1995 = {1: 1, 2: 0, 3: 0, 4: 0, 5: 1, 6: 1}
+INDICE_BJ_POR_INDICE_1995 = {1: 1, 2: 0, 3: 0, 4: 0, 5: 2, 6: 2}
+# [CERTAIN, 2026-10-05, captura real de la app FlowXpert, 16 casos del libro 02] Columna por temperatura de
+# medicion: 0 degC -> 0, 15 degC -> 1, 20 degC -> 2. El mapeo anterior (20 degC -> columna 1) se habia calibrado
+# con la formula de Z equivocada (ver calcular_factor_compresion_1995).
+
+
+# [CERTAIN, 2026-10-05] Aire de ISO 6976:1995 (masa molar y Z del aire por temperatura de medicion). Se
+# recuperan de la app FlowXpert real (d * Z * Maire / M) con 6 cifras en los 16 casos del libro 02.
+M_AIRE_1995 = 28.9626
+Z_AIRE_1995 = {273.15: 0.99941, 288.15: 0.99958, 293.15: 0.99963}
+
+
+def calcular_densidad_relativa_1995(mmix: float, zmix: float, t_metering: float) -> float:
+    """d = (Mmix / Maire) * (Zaire(T) / Zmix) con los valores del aire de ISO 6976:1995."""
+    return (mmix / M_AIRE_1995) * (Z_AIRE_1995[t_metering] / zmix)
+
+
+def calcular_factor_compresion_1995(fracciones_molares: dict, indice_bj: int) -> float:
+    """Z = 1 - (sum xj * sqrt(bj))^2  (metodo de factores de suma de ISO 6976:1995).
+
+    [CERTAIN, 2026-10-05] La columna "bj" de TABLA_CONSTANTES ya contiene sqrt(bj) (factor de suma de la
+    norma; ej. metano 0.0490 / 0.0447 / 0.0436 a 0 / 15 / 20 degC). Con esta formula el Z coincide EXACTO
+    (0.0000 %) con la app FlowXpert real en los 16 casos del libro 02, incluidos Wet Gas (H2O 15 %) y Pure CO2.
+    La funcion comun `calcular_factor_compresion` (que vuelve a sacar la raiz y multiplica por p/(R*T))
+    llegaba a +0.32 %. Hidrogeno: el factor de suma es negativo y se suma con su signo.
+    """
+    suma = 0.0
+    for c in ORDEN_COMPONENTES_APP:
+        x = fracciones_molares.get(c, 0.0)
+        if x:
+            suma += x * TABLA_CONSTANTES[c]["bj"][indice_bj]
+    return 1.0 - suma * suma
 
 # [CERTAIN, ver seccion 8 -- cierre 0.0006%, practicamente bit-exacto,
 # patron monotonico fisicamente consistente] indice Hoj (columna de
@@ -855,6 +887,60 @@ def validar_rango_iso6976_1995(fracciones_molares: dict) -> dict:
     return {"en_rango": en_rango, "fuera_de_rango": fuera_de_rango, "mensaje": mensaje}
 
 
+
+# =============================================================================
+# [CERTAIN, 2026-10-06] Ajustes al ultimo digito contra 16 capturas reales (libro 02): todas las salidas numericas
+# de la pantalla "ISO-6976 (1995)" coinciden con FlowXpert a los decimales de pantalla.
+#  1. La composicion se normaliza (Dry Air suma 99.9978 %).
+#  2. "Calculate": pesos atomicos de la tabla del binario (libFXLibrary.so 0x22a1c8): C 12.011, H 1.00794,
+#     O 15.9994, N 14.00674, S 32.066 (He y Ar con los valores de ISO 6976:1995).
+#  3. R de ISO 6976:1995 = 8.314510 J/(mol K) (antes 8.31446).
+#  4. "Calorific Val. Method" = "Alternative": poder calorifico por volumen = sum(x Hv_ideal)/Z y por masa =
+#     sum(x M Hm)/sum(x M) con las tablas por volumen y por masa de la norma (binario 0x31b400, filas de 35
+#     valores); M es la del metodo de masa molar elegido. "Definitive" deriva todo del valor molar.
+# =============================================================================
+R_GAS_1995 = 8.31451
+PESO_ATOMICO_1995 = {"C": 12.011, "H": 1.00794, "O": 15.9994, "N": 14.00674, "S": 32.066, "He": 4.0026, "Ar": 39.948}
+# Orden de las 6 combinaciones de Hs_vol/Hi_vol = OPCIONES_REF_TEMPERATURE_1995; Hs_masa/Hi_masa por temperatura
+# de combustion [25, 20, 15, 0] degC.
+TABLA_ISO6976_1995_ALTERNATIVO = {
+    'Metano': {"M": 16.043, "Hs_masa": [55.516, 55.545, 55.574, 55.662], "Hi_masa": [50.029, 50.032, 50.035, 50.043], "Hs_vol": [37.706, 39.84, 39.777, 39.735, 37.044, 37.024], "Hi_vol": [33.948, 35.818, 35.812, 35.808, 33.367, 33.365]},
+    'Etano': {"M": 30.07, "Hs_masa": [51.9, 51.93, 51.95, 52.02], "Hi_masa": [47.51, 47.51, 47.52, 47.53], "Hs_vol": [66.07, 69.79, 69.69, 69.63, 64.91, 64.88], "Hi_vol": [60.43, 63.76, 63.75, 63.74, 59.39, 59.39]},
+    'Propano': {"M": 44.097, "Hs_masa": [50.33, 50.35, 50.37, 50.44], "Hi_masa": [46.33, 46.34, 46.34, 46.35], "Hs_vol": [93.94, 99.22, 99.09, 99.01, 92.29, 92.25], "Hi_vol": [86.42, 91.18, 91.16, 91.15, 84.94, 84.93]},
+    'i-Butano': {"M": 58.123, "Hs_masa": [49.35, 49.37, 49.39, 49.45], "Hi_masa": [45.56, 45.56, 45.57, 45.57], "Hs_vol": [121.4, 128.23, 128.07, 127.96, 119.28, 119.23], "Hi_vol": [112.01, 118.18, 118.16, 118.15, 110.09, 110.08]},
+    'n-Butano': {"M": 58.123, "Hs_masa": [49.51, 49.53, 49.55, 49.62], "Hi_masa": [45.72, 45.72, 45.72, 45.74], "Hs_vol": [121.79, 128.66, 128.48, 128.37, 119.66, 119.62], "Hi_vol": [112.4, 118.61, 118.57, 118.56, 110.47, 110.47]},
+    'i-Pentano': {"M": 72.15, "Hs_masa": [48.91, 48.93, 48.95, 49.01], "Hi_masa": [45.25, 45.25, 45.25, 45.26], "Hs_vol": [149.36, 157.76, 157.57, 157.44, 146.76, 146.7], "Hi_vol": [138.09, 145.69, 145.67, 145.66, 135.72, 135.72]},
+    'n-Pentano': {"M": 72.15, "Hs_masa": [49.01, 49.03, 49.04, 49.1], "Hi_masa": [45.35, 45.35, 45.35, 45.36], "Hs_vol": [149.66, 158.07, 157.87, 157.75, 147.04, 146.99], "Hi_vol": [138.38, 146.0, 145.98, 145.96, 136.01, 136.01]},
+    'neo-Pentano': {"M": 72.15, "Hs_masa": [48.71, 48.73, 48.75, 48.81], "Hi_masa": [45.05, 45.05, 45.06, 45.06], "Hs_vol": [148.76, 157.12, 156.93, 156.8, 146.16, 146.11], "Hi_vol": [137.49, 145.06, 145.04, 145.02, 135.13, 135.13]},
+    'n-Hexano': {"M": 86.177, "Hs_masa": [48.68, 48.7, 48.72, 48.77], "Hi_masa": [45.1, 45.1, 45.11, 45.11], "Hs_vol": [177.55, 187.53, 187.3, 187.16, 174.46, 174.39], "Hi_vol": [164.4, 173.45, 173.43, 173.41, 161.59, 161.58]},
+    'n-Heptano': {"M": 100.204, "Hs_masa": [48.44, 48.45, 48.47, 48.53], "Hi_masa": [44.92, 44.92, 44.93, 44.93], "Hs_vol": [205.42, 216.96, 216.7, 216.53, 201.84, 201.76], "Hi_vol": [190.39, 200.87, 200.84, 200.82, 187.13, 187.12]},
+    'n-Octano': {"M": 114.231, "Hs_masa": [48.25, 48.27, 48.29, 48.34], "Hi_masa": [44.78, 44.79, 44.79, 44.79], "Hs_vol": [233.28, 246.38, 246.1, 245.91, 229.22, 229.13], "Hi_vol": [216.37, 228.28, 228.25, 228.23, 212.67, 212.66]},
+    'n-Nonano': {"M": 128.258, "Hs_masa": [48.12, 48.13, 48.15, 48.21], "Hi_masa": [44.68, 44.69, 44.69, 44.69], "Hs_vol": [261.19, 275.85, 275.53, 275.32, 256.64, 256.54], "Hi_vol": [242.4, 255.74, 255.71, 255.69, 238.25, 238.24]},
+    'n-Decano': {"M": 142.285, "Hs_masa": [48.0, 48.02, 48.04, 48.09], "Hi_masa": [44.6, 44.6, 44.6, 44.61], "Hs_vol": [289.06, 305.29, 304.94, 304.71, 284.03, 283.92], "Hi_vol": [268.39, 283.16, 283.13, 283.11, 263.8, 263.79]},
+    'Hidrogeno': {"M": 2.0159, "Hs_masa": [141.79, 141.87, 141.95, 142.19], "Hi_masa": [119.95, 119.93, 119.91, 119.83], "Hs_vol": [12.102, 12.788, 12.767, 12.752, 11.889, 11.882], "Hi_vol": [10.223, 10.777, 10.784, 10.788, 10.05, 10.052]},
+    'Agua': {"M": 18.0153, "Hs_masa": [2.44, 2.45, 2.47, 2.5], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [1.88, 2.01, 1.98, 1.96, 1.84, 1.83], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    'H2S': {"M": 34.082, "Hs_masa": [16.49, 16.5, 16.5, 16.52], "Hi_masa": [15.2, 15.2, 15.2, 15.19], "Hs_vol": [23.78, 25.12, 25.09, 25.07, 23.37, 23.36], "Hi_vol": [21.91, 23.1, 23.11, 23.11, 21.53, 21.53]},
+    'CO': {"M": 28.01, "Hs_masa": [10.1, 10.1, 10.1, 10.1], "Hi_masa": [10.1, 10.1, 10.1, 10.1], "Hs_vol": [11.96, 12.62, 12.62, 12.63, 11.76, 11.76], "Hi_vol": [11.96, 12.62, 12.62, 12.63, 11.76, 11.76]},
+    'Oxigeno': {"M": 31.9988, "Hs_masa": [0.0, 0.0, 0.0, 0.0], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    'Helio': {"M": 4.0026, "Hs_masa": [0.0, 0.0, 0.0, 0.0], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    'Argon': {"M": 39.948, "Hs_masa": [0.0, 0.0, 0.0, 0.0], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    'Nitrogeno': {"M": 28.0135, "Hs_masa": [0.0, 0.0, 0.0, 0.0], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+    'CO2': {"M": 44.01, "Hs_masa": [0.0, 0.0, 0.0, 0.0], "Hi_masa": [0.0, 0.0, 0.0, 0.0], "Hs_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0], "Hi_vol": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]},
+}
+_T_COMBUSTION_POR_INDICE_1995 = {1: 15, 2: 0, 3: 15, 4: 25, 5: 20, 6: 25}
+_COLUMNA_MASA_1995 = {25: 0, 20: 1, 15: 2, 0: 3}
+
+
+def _masa_molar_componente_1995(componente: str, molar_mass_method: str) -> float:
+    if molar_mass_method == "Calculate":
+        return sum(n * PESO_ATOMICO_1995[el] for el, n in CONTEO_ATOMICO.get(componente, {}).items())
+    return TABLA_ISO6976_1995_ALTERNATIVO[componente]["M"]
+
+
+def _normalizar(fracciones_molares: dict) -> dict:
+    total = sum(fracciones_molares.values())
+    return {k: v / total for k, v in fracciones_molares.items()} if total > 0 else dict(fracciones_molares)
+
 def calcular_iso6976_1995(fracciones_molares: dict,
                            molar_mass_method: str = "Use table",
                            calorific_val_method: str = "Definitive",
@@ -896,8 +982,9 @@ def calcular_iso6976_1995(fracciones_molares: dict,
         raise ValueError(
             f"ref_temperature_index invalido: {ref_temperature_index!r} "
             f"(debe ser 1..6, ver OPCIONES_REF_TEMPERATURE_1995)")
+    fracciones_molares = _normalizar(fracciones_molares)
     if molar_mass_method == "Calculate":
-        mmix = calcular_masa_molar_metodo_b(fracciones_molares)
+        mmix = sum(x * _masa_molar_componente_1995(c, "Calculate") for c, x in fracciones_molares.items())
     else:
         mmix = calcular_masa_molar(fracciones_molares)
 
@@ -906,19 +993,19 @@ def calcular_iso6976_1995(fracciones_molares: dict,
     indice_hoj = INDICE_HOJ_POR_INDICE_1995[ref_temperature_index]
     bair_idx = BAIR_INDEX_POR_INDICE_1995[ref_temperature_index]
 
-    z = calcular_factor_compresion(
-        fracciones_molares, indice_temp=indice_bj,
-        p_ref=P_REF_PA_1995, t0=t_metering,
-    )
-    vm_ideal = calcular_volumen_molar_ideal(t=t_metering, p=P_REF_PA_1995)
+    z = calcular_factor_compresion_1995(fracciones_molares, indice_bj)
+    vm_ideal = R_GAS_1995 * t_metering / P_REF_PA_1995
     vm_real = calcular_volumen_molar_real(vm_ideal, z)
     densidad_real = (mmix / 1000.0) / vm_real
-    densidad_relativa = calcular_densidad_relativa(
-        mmix, z, indice_temp_raw=bair_idx, p_ref=P_REF_PA_1995)
+    densidad_relativa = calcular_densidad_relativa_1995(mmix, z, t_metering)
     hm_bruto = calcular_poder_calorifico_molar(
         fracciones_molares, "bruto", indice_temp_combustion=indice_hoj,
     )
     poder_calorifico_volumen_bruto = (hm_bruto / vm_real) / 1000.0  # MJ/m3
+    if calorific_val_method == "Alternative":
+        idx_vol = ref_temperature_index - 1
+        poder_calorifico_volumen_bruto = sum(
+            x * TABLA_ISO6976_1995_ALTERNATIVO[c]["Hs_vol"][idx_vol] for c, x in fracciones_molares.items()) / z
 
     return {
         "Molar Mass (g/mol)": mmix,
@@ -940,13 +1027,14 @@ def calcular_iso6976_1995_extendido(fracciones_molares: dict,
     Ver `calcular_iso6976_1995` para el significado de `molar_mass_method`/
     `calorific_val_method`/`ref_temperature_index`.
     """
+    fracciones_molares = _normalizar(fracciones_molares)
     base = calcular_iso6976_1995(fracciones_molares, molar_mass_method,
                                   calorific_val_method, ref_temperature_index)
     mmix = base["Molar Mass (g/mol)"]
     z = base["Compressibility (Z)"]
     t_metering = T_METERING_POR_INDICE_1995[ref_temperature_index]
     indice_hoj = INDICE_HOJ_POR_INDICE_1995[ref_temperature_index]
-    vm_ideal = calcular_volumen_molar_ideal(t=t_metering, p=P_REF_PA_1995)
+    vm_ideal = R_GAS_1995 * t_metering / P_REF_PA_1995
     vm_real = calcular_volumen_molar_real(vm_ideal, z)
     hm_bruto = calcular_poder_calorifico_molar(
         fracciones_molares, "bruto", indice_temp_combustion=indice_hoj,
@@ -966,6 +1054,16 @@ def calcular_iso6976_1995_extendido(fracciones_molares: dict,
         "NCV neto, base molar (kJ/mol)": hm_neto,
         "Indice de Wobbe bruto": wobbe,
     })
+    if calorific_val_method == "Alternative":
+        idx_vol = ref_temperature_index - 1
+        col = _COLUMNA_MASA_1995[_T_COMBUSTION_POR_INDICE_1995[ref_temperature_index]]
+        tab = TABLA_ISO6976_1995_ALTERNATIVO
+        masa = {c: x * _masa_molar_componente_1995(c, molar_mass_method) for c, x in fracciones_molares.items()}
+        masa_total = sum(masa.values())
+        extendido["NCV neto, base volumen (MJ/m3)"] = sum(
+            x * tab[c]["Hi_vol"][idx_vol] for c, x in fracciones_molares.items()) / z
+        extendido["GCV bruto, base masa (MJ/kg)"] = sum(m * tab[c]["Hs_masa"][col] for c, m in masa.items()) / masa_total
+        extendido["NCV neto, base masa (MJ/kg)"] = sum(m * tab[c]["Hi_masa"][col] for c, m in masa.items()) / masa_total
     return extendido
 
 

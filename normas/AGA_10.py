@@ -82,9 +82,11 @@ Esto confirma:
      molar de una composicion de aire real).
   4. "Real rel. Density" = (Mm_gas/28.9625) * (Z_aire/Z_gas), calculando
      Z_aire con el MISMO motor AGA8-DETAIL aplicado a una composicion de
-     aire seco estandar (N2 78.09%, O2 20.95%, Ar 0.93%, CO2 0.04%) a las
-     MISMAS T,P del gas -- confirmado numericamente: real=0.644583,
-     calculado=0.644578 (dif. 0.0007%).
+     aire seco estandar (N2 78.09%, O2 20.95%, Ar 0.93%, CO2 0.04%), ambos
+     Z a las condiciones BASE (Tb, Pb). [CERTAIN, 2026-10-05] Corregido: antes
+     se usaban las T,P de flujo; el caso de validacion original tenia base =
+     flujo y no lo detectaba. 15 capturas reales del libro 01 coinciden
+     <= 0.0005 % con condiciones base (hallazgo D-44).
 No se comparo la entalpia absoluta (H) porque DETAIL.FOR la define relativa
 a un estado de referencia arbitrario distinto del que usa la app -- solo
 las DIFERENCIAS/derivadas (Cp, Cv, W, Fpv, Kappa) son comparables entre
@@ -506,6 +508,8 @@ PB_DEFAULT_KPA = 101.325  # 14.696 psia
 # seco estandar usada para "Real rel. Density" (via el mismo motor AGA8-DETAIL,
 # confirmada contra caso real dentro de 0.001%).
 MM_AIRE = 28.9625
+MM_AIRE_FLOWXPERT = 28.96256
+Z_AIRE_FLOWXPERT_0C_1ATM = 0.99940971
 COMPOSICION_AIRE_SECO = {"Nitrogeno": 78.09, "Oxigeno": 20.95, "Argon": 0.93, "CO2": 0.04}
 
 
@@ -791,6 +795,83 @@ def resolver_flujo_critico(T0_K: float, P0_kPa: float, x: list, max_iter: int = 
     }
 
 
+# =============================================================================
+# [CERTAIN, 2026-10-06] GAS IDEAL DE AGA REPORT No. 10 (tabla de libFXLibrary.so 0x3204c0, 21 filas x A..K)
+# =============================================================================
+# FlowXpert (AGA10::crit) NO usa la parte ideal de AGA-8 DETAIL: usa la tabla de calor especifico ideal del
+# propio AGA Report No. 10 (en cal/(mol K), x 4.184): Cp0 = B + C(D/T/sinh(D/T))^2 + E(F/T/cosh(F/T))^2 +
+# G(H/T/sinh(H/T))^2 + I(J/T/cosh(J/T))^2; H0 = A + B T + C D coth(D/T) - E F tanh(F/T) + G H coth(H/T) -
+# I J tanh(J/T); S0 = K + B ln T + ... (A y K son las constantes de integracion). La parte residual sigue siendo
+# la de AGA-8 DETAIL. Validado contra la rutina real emulada: los 21 componentes puros (Cp0) y 18 casos (Cp, Cv,
+# H, S, W, exponente isentropico) con error < 1e-9 (antes 0.001-0.03 %; el H2 diferia 0.19 %).
+TABLA_GAS_IDEAL_AGA10 = {
+    'Metano': [-29776.4, 7.95454, 43.9417, 1037.09, 1.56373, 813.205, -24.9027, 1019.98, -10.1601, 1070.14, -20.0615],
+    'Nitrogeno': [-3495.34, 6.95587, 0.272892, 662.738, -0.291318, -680.562, 1.7898, 1740.06, 0.0, 100.0, 4.49823],
+    'CO2': [20.7307, 6.96237, 2.68645, 500.371, -2.56429, -530.443, 3.91921, 500.198, 2.1329, 2197.22, 5.81381],
+    'Etano': [-37524.4, 7.98139, 24.3668, 752.32, 3.5399, 272.846, 8.44724, 1020.13, -13.2732, 869.51, -22.401],
+    'Propano': [-56072.1, 8.14319, 37.0629, 735.402, 9.38159, 247.19, 13.4556, 1454.78, -11.7342, 984.518, -24.0426],
+    'Agua': [-13773.1, 7.97183, 6.27078, 2572.63, 2.0501, 1156.72, 0.0, 100.0, 0.0, 100.0, -3.24989],
+    'H2S': [-10085.4, 7.9468, -0.0838, 433.801, 2.85539, 843.792, 6.31595, 1481.43, -2.88457, 1102.23, -0.51551],
+    'Hidrogeno': [-5565.6, 6.66789, 2.33458, 2584.98, 0.749019, 559.656, 0.0, 100.0, 0.0, 100.0, -7.94821],
+    'CO': [-2753.49, 6.95854, 2.02441, 1541.22, 0.096774, 3674.81, 0.0, 100.0, 0.0, 100.0, 6.23387],
+    'Oxigeno': [-3497.45, 6.96302, 2.40013, 2522.05, 2.21752, 1154.15, 0.0, 100.0, 0.0, 100.0, 9.19749],
+    'Isobutano': [-72387.0, 17.8143, 58.2062, 1787.39, 40.7621, 808.645, 0.0, 100.0, 0.0, 100.0, -44.1341],
+    'n-Butano': [-72674.8, 18.6383, 57.4178, 1792.73, 38.6599, 814.151, 0.0, 100.0, 0.0, 100.0, -46.1938],
+    'Isopentano': [-91505.5, 21.3861, 74.341, 1701.58, 47.0587, 775.899, 0.0, 100.0, 0.0, 100.0, -60.2474],
+    'n-Pentano': [-83845.2, 22.5012, 69.5789, 1719.58, 46.2164, 802.174, 0.0, 100.0, 0.0, 100.0, -62.2197],
+    'n-Hexano': [-94982.5, 26.6225, 80.3819, 1718.49, 55.6598, 802.069, 0.0, 100.0, 0.0, 100.0, -77.5366],
+    'n-Heptano': [-103353.0, 30.4029, 90.6941, 1669.32, 63.2028, 786.001, 0.0, 100.0, 0.0, 100.0, -92.0164],
+    'n-Octano': [-109674.0, 34.0847, 100.253, 1611.55, 69.7675, 768.847, 0.0, 100.0, 0.0, 100.0, -106.149],
+    'n-Nonano': [-122599.0, 38.5014, 111.446, 1646.48, 80.5015, 781.588, 0.0, 100.0, 0.0, 100.0, -122.444],
+    'n-Decano': [-133564.0, 42.7143, 122.173, 1654.85, 90.2255, 785.564, 0.0, 100.0, 0.0, 100.0, -138.006],
+    'Helio': [0.0, 4.968, 0.0, 100.0, 0.0, 100.0, 0.0, 100.0, 0.0, 100.0, 1.8198],
+    'Argon': [0.0, 4.968, 0.0, 100.0, 0.0, 100.0, 0.0, 100.0, 0.0, 100.0, 8.6776],
+}
+_CAL_A_J = 4.184
+
+
+def _gas_ideal_puro_aga10(f, t):
+    a_, b_, c_, d_, e_, f_, g_, h_, i_, j_, k_ = f
+    cp, h, s = b_, a_ + b_ * t, k_ + b_ * math.log(t)
+    for c, d, tipo in ((c_, d_, "s"), (e_, f_, "c"), (g_, h_, "s"), (i_, j_, "c")):
+        if not c:
+            continue
+        xx = d / t
+        if tipo == "s":
+            cp += c * (xx / math.sinh(xx)) ** 2
+            h += c * d / math.tanh(xx)
+            s += c * (xx / math.tanh(xx) - math.log(math.sinh(xx)))
+        else:
+            cp += c * (xx / math.cosh(xx)) ** 2
+            h -= c * d * math.tanh(xx)
+            s -= c * (xx * math.tanh(xx) - math.log(math.cosh(xx)))
+    return cp * _CAL_A_J, h * _CAL_A_J, s * _CAL_A_J
+
+
+def _termicas_aga10(composicion: dict, T_K: float, P_kPa: float, prop: dict) -> dict:
+    """Propiedades termicas de AGA-10 como FlowXpert: gas ideal de AGA-10 + residual de DETAIL (prop =
+    PropertiesDetail a T, densidad de flujo). Devuelve kJ/kg, m/s y adimensionales."""
+    R = R_DETAIL
+    tot = sum(v for v in composicion.values() if v)
+    x = {k: v / tot for k, v in composicion.items() if v and k in TABLA_GAS_IDEAL_AGA10}
+    cp0 = h0 = s0 = 0.0
+    for n, xi in x.items():
+        c, h, s = _gas_ideal_puro_aga10(TABLA_GAS_IDEAL_AGA10[n], T_K)
+        cp0 += xi * c
+        h0 += xi * h
+        s0 += xi * s
+    s0 -= R * sum(xi * math.log(xi) for xi in x.values()) + R * math.log(P_kPa / 101.325)
+    Mm = prop["Mm_g_mol"]
+    cp = cp0 + (prop["Cp_J_molK"] - prop["Cp0_J_molK"])
+    cv = (cp0 - R) + (prop["Cv_J_molK"] - prop["Cv0_J_molK"])
+    h_real = h0 + (prop["H_J_mol"] - prop["H0_J_mol"])
+    s_real = s0 + (prop["S_J_molK"] - prop["S0_J_molK"]) + R * math.log(prop["Z"])
+    w = math.sqrt(1000.0 * cp / cv * prop["dPdD"] / Mm)
+    return {"Cp0": cp0 / Mm, "Cv0": (cp0 - R) / Mm, "Cp": cp / Mm, "Cv": cv / Mm, "H0": h0 / Mm,
+            "H": h_real / Mm, "S": s_real / Mm, "W": w, "Kappa": w * w * Mm / (R * T_K * 1000.0 * prop["Z"]),
+            "Cp_Cv": cp / cv}
+
+
 def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
                                       Tb_K: float = TB_DEFAULT_K, Pb_kPa: float = PB_DEFAULT_KPA,
                                       calcular_flujo_critico: bool = False):
@@ -831,10 +912,18 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
     Fpv = (Zb / Zf) ** 0.5
 
     Mm = prop_flujo["Mm_g_mol"]
-    rd_ideal = Mm / MM_AIRE
-    prop_aire = calcular_propiedades(COMPOSICION_AIRE_SECO, T_K, P_kPa)
-    Z_aire = prop_aire["Z"]
-    rd_real = rd_ideal * (Z_aire / Zf)
+    # [CERTAIN, 2026-10-06, rutina real AGA10::crit emulada + 15 capturas] FlowXpert usa M_aire = 28.96256
+    # (constante de libFXLibrary.so 0x228cc8) y, a la base de la pantalla (0 degC, 101.325 kPa), Z_aire =
+    # 0.99940971 (identico en todos los casos emulados). Con 28.9625 y el Z del aire calculado con DETAIL
+    # (0.9994053) las densidades relativas diferian en el 6.o decimal.
+    rd_ideal = Mm / MM_AIRE_FLOWXPERT
+    # [CERTAIN, 2026-10-05, hallazgo D-44] densidad relativa real a condiciones BASE (Z_aire y Z_gas a Tb/Pb).
+    if abs(Tb_K - 273.15) < 1e-9 and abs(Pb_kPa - 101.325) < 1e-9:
+        Z_aire = Z_AIRE_FLOWXPERT_0C_1ATM
+    else:
+        # [Guessing] para otra base no se conoce el Z del aire de FlowXpert: se calcula con DETAIL
+        Z_aire = calcular_propiedades(COMPOSICION_AIRE_SECO, Tb_K, Pb_kPa)["Z"]
+    rd_real = rd_ideal * (Z_aire / Zb)
 
     Cp_kJ_kgC = prop_flujo["Cp_J_molK"] / Mm
     Cv_kJ_kgC = prop_flujo["Cv_J_molK"] / Mm
@@ -1089,8 +1178,15 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         if calcular_flujo_critico and rango_aga10["rango_combinado"] != "Normal" else None
     )
 
+    # [2026-10-06] propiedades termicas con el gas ideal de AGA-10 (ver TABLA_GAS_IDEAL_AGA10), en ambos modos
+    _t10 = _termicas_aga10(composicion, T_K, P_kPa, prop_flujo)
+    Cp_kJ_kgC, Cv_kJ_kgC, Cp0_kJ_kgC, Cv0_kJ_kgC = _t10["Cp"], _t10["Cv"], _t10["Cp0"], _t10["Cv0"]
+    H0_kJ_kg, H_kJ_kg, S_kJ_kgC = _t10["H0"], _t10["H"], _t10["S"]
+    if calcular_flujo_critico:
+        isentropic_ideal_Cstar = _cstar_ideal(_t10["Kappa"])
+        isentropic_real_Cstar = _cstar_real(_t10["Kappa"], Zf)
     return {
-        "W_m_s": prop_flujo["W_m_s"],
+        "W_m_s": _t10["W"],
         "Z_flujo": Zf,
         "Z_base": Zb,
         "Fpv": Fpv,
@@ -1116,8 +1212,8 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         "S_kJ_kgC": S_kJ_kgC,
         "H0_kJ_kmol": H0_kJ_kg * Mm,
         "H_kJ_kmol": H_kJ_kg * Mm,
-        "Kappa": prop_flujo["Kappa"],
-        "Cp_Cv_ratio": prop_flujo["Cp_J_molK"] / prop_flujo["Cv_J_molK"],
+        "Kappa": _t10["Kappa"],
+        "Cp_Cv_ratio": _t10["Cp_Cv"],
         "critical_flow_factor": critical_flow_factor,
         "isentropic_ideal_Cstar": isentropic_ideal_Cstar,
         "isentropic_real_Cstar": isentropic_real_Cstar,

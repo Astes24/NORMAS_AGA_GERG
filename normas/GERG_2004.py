@@ -3,9 +3,30 @@
 normas/GERG_2004.py
 ======================
 GERG-2004 (Kunz, Klimeck, Wagner, Jaeschke -- GERG Technical Monograph 15,
-2007). Alias documentado sobre `normas/GERG_2008.py`, NO una traduccion
-independiente. Ver justificacion abajo antes de asumir que esto es
-intercambiable en todos los casos.
+2007). Mismo codigo de calculo que `normas/GERG_2008.py`, pero con los DATOS
+propios de la ruta GERG-2004 de FlowXpert (`normas/_gerg2004_data_generado.py`).
+
+===============================================================================
+ACTUALIZACION 2026-10-05 [CERTAIN] -- SUPERA la conclusion "misma tabla" de abajo
+===============================================================================
+El binario tiene DOS juegos de tablas GERG. La ruta GERG-2004 de FlowXpert
+difiere de GERG-2008 en:
+  1. CO e isopentano: coeficientes y constantes criticas de la NORMA GERG-2004
+     (TM15, Tablas A3.2 y A3.5; CO Tc 132.800 K, iC5 Dc 3.271018581 mol/l).
+     GERG-2008 los modifico.
+  2. n-nonano, n-decano y H2S: la TM15 no los incluye; FlowXpert los acepta con
+     coeficientes, constantes criticas y pares binarios propios (sin fuente
+     publica). Gas ideal del H2S solo con el termino constante.
+  3. Pares binarios derivados de lo anterior.
+La busqueda de julio concluyo "una sola copia" porque busco el bloque CONTIGUO
+de 24 coeficientes del metano (la tabla de GERG-2008 esta intercalada) y cotejo
+la TM15 solo en metano, N2 y etano. Decision del usuario 2026-10-05: replicar
+FlowXpert. Validado con 5 capturas reales (H2S en mezcla y puro, metano con
+n-nonano, metano con n-decano, CO puro): error <= 0.00007 % en Z, densidad,
+velocidad del sonido y exponente isentropico. Con los 16 componentes restantes
+GERG-2004 y GERG-2008 dan lo mismo (libro 01). El texto historico de abajo se
+conserva como registro.
+===============================================================================
 
 Este archivo se puede ejecutar solo:
     python -m normas.GERG_2004
@@ -152,15 +173,57 @@ demas: Gas vs Flash, Add to iC5, Add to nC5, formulas, coeficientes).
 ===============================================================================
 """
 
-from .GERG_2008 import (  # noqa: F401
-    calcular_propiedades,
-    calcular_flash,
-    DensityGERG,
-    PropertiesGERG,
-    PressureGERG,
-    MolarMassGERG,
-    NOMBRES_COMPONENTES,
-)
+import os as _os
+import sys as _sys
+import types as _types
+
+
+def _cargar_motor_gerg2004():
+    """Ejecuta el codigo de GERG_2008.py como un modulo aparte que importa los datos de GERG-2004
+    (`_gerg2004_data_generado`). GERG-2008 no se modifica: cada norma tiene su propio estado."""
+    nombre = __name__.rpartition(".")[0] + "._gerg2004_motor"
+    if nombre in _sys.modules:
+        return _sys.modules[nombre]
+    ruta = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "GERG_2008.py")
+    with open(ruta, encoding="utf-8") as fh:
+        src = fh.read()
+    marca = "from ._gerg2008_data_generado import ("
+    assert src.count(marca) == 1, "GERG_2008.py cambio: revisar la carga del motor GERG-2004"
+    src = src.replace(marca, "from ._gerg2004_data_generado import (")
+    mod = _types.ModuleType(nombre)
+    mod.__file__ = ruta
+    mod.__package__ = __name__.rpartition(".")[0]
+    _sys.modules[nombre] = mod
+    exec(compile(src, ruta, "exec"), mod.__dict__)
+    # Gas ideal del H2S (indice 19): la ruta GERG-2004 de FlowXpert usa solo el termino constante.
+    # Confirmado con H2S puro 298.15 K / 1000 kPa: W 297.1264 m/s y kappa 1.319038 exactos.
+    mod.n0i[19][4] = 0.0
+    mod.n0i[19][5] = 0.0
+
+    # [CERTAIN, 2026-10-06, rutina real emulada (Unicorn) + capturas Nordic/Sleen/Default del libro 01] La ruta
+    # GERG-2004 de FlowXpert NO normaliza la composicion: usa cada porcentaje / 100 (Nordic suma 99.9995 % y da
+    # Z 0.772881 solo sin normalizar). Si la suma se aleja mas de 0.01 % de 100 % se normaliza [Guessing: la app
+    # real probablemente rechaza la composicion].
+    def _composicion_a_x(composicion: dict):
+        total = sum(composicion.values())
+        if total <= 0:
+            raise ValueError("La composicion no puede sumar cero.")
+        escala = 100.0 if total > 1.5 else 1.0
+        if abs(total / escala - 1.0) > 1e-4:
+            escala = total
+        return [None] + [composicion.get(nombre, 0.0) / escala for nombre in mod.NOMBRES_COMPONENTES]
+    mod._composicion_a_x = _composicion_a_x
+    return mod
+
+
+_motor = _cargar_motor_gerg2004()
+calcular_propiedades = _motor.calcular_propiedades
+calcular_flash = _motor.calcular_flash
+DensityGERG = _motor.DensityGERG
+PropertiesGERG = _motor.PropertiesGERG
+PressureGERG = _motor.PressureGERG
+MolarMassGERG = _motor.MolarMassGERG
+NOMBRES_COMPONENTES = _motor.NOMBRES_COMPONENTES
 
 calcular_propiedades_gas = calcular_propiedades  # alias explicito: pantalla "GERG-2004 Gas"
 
@@ -174,7 +237,7 @@ if __name__ == "__main__":
         "CO": 0.002, "Agua": 0.0001, "H2S": 0.0025, "Helio": 0.007,
         "Argon": 0.001,
     }
-    print("=== normas/GERG_2004.py -- autotest (Gas, alias sobre GERG_2008.py) ===")
+    print("=== normas/GERG_2004.py -- autotest (Gas, datos GERG-2004 de FlowXpert) ===")
     r = calcular_propiedades_gas(composicion_ejemplo, 400.0, 50000.0)
     for k in ["Mm_g_mol", "D_mol_l", "Z", "Cv_J_molK", "Cp_J_molK", "W_m_s"]:
         print(f"  {k} = {r[k]:.6f}")

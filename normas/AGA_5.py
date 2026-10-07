@@ -196,11 +196,19 @@ def calcular_poder_calorifico(composicion: dict, gravedad_especifica: float) -> 
     if gravedad_especifica <= 0:
         raise ValueError("La gravedad especifica debe ser mayor que cero.")
 
-    total = sum(composicion.get(nombre, 0.0) for nombre in ORDEN_COMPONENTES_APP)
+    # [CERTAIN, 2026-10-05, 15 capturas reales libro 01, hallazgo D-47] FlowXpert NO renormaliza: usa cada
+    # porcentaje / 100 tal como se ingreso (Dry Air suma 99.9978 % y la app real da 533.1562 kJ/kg, que solo
+    # se reproduce sin normalizar; con normalizacion salia -0.21 %). Ademas la suma anterior usaba los nombres
+    # "i-Butano"/"i-Pentano" de ORDEN_COMPONENTES_APP y omitia "Isobutano"/"Isopentano" del total.
+    # [Guessing] Si la suma se aleja mas de 0.01 % de 100 % (la app real probablemente la rechaza) se
+    # normaliza, como antes.
+    total = sum(v for v in composicion.values() if v)
     if total == 0:
         raise ValueError("La composicion no puede sumar cero.")
-
-    frac = {nombre: composicion.get(nombre, 0.0) / total for nombre in ORDEN_COMPONENTES_APP}
+    escala = 100.0 if total > 1.5 else 1.0
+    if abs(total / escala - 1.0) > 1e-4:
+        escala = total
+    frac = {nombre: composicion.get(nombre, 0.0) / escala for nombre in set(ORDEN_COMPONENTES_APP) | set(composicion)}
 
     sg = gravedad_especifica
 

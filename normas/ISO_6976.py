@@ -1792,7 +1792,9 @@ ORDEN_COMPONENTES_APP = [
 # calculate_molar_mass. Estos SI son valores de quimica basica, no dependen
 # de la extraccion del binario -- [CERTAIN] como dato de quimica, aunque no
 # se confirmo que sean EXACTAMENTE estos decimales dentro del binario.
-PESO_ATOMICO = {"C": 12.011, "H": 1.008, "N": 14.007, "O": 15.999, "S": 32.06}
+# [CERTAIN, 2026-10-05] He y Ar agregados: faltaban, y el metodo "Calculate" omitia el helio y el argon
+# (Sleen y Default de ISO 1995 -0.02 % / -0.009 %; Dry Air de ISO 2016 -1.27 %, hallazgo D-51).
+PESO_ATOMICO = {"C": 12.011, "H": 1.008, "N": 14.007, "O": 15.999, "S": 32.06, "He": 4.0026, "Ar": 39.948}
 
 # Constante universal de los gases, J/(mol*K). Usada en Vm_ideal = R*T/p.
 R_GAS = 8.31446
@@ -2019,11 +2021,11 @@ CONTEO_ATOMICO = {
     "n-Nonano":    {"C": 9, "H": 20},
     "n-Decano":    {"C": 10, "H": 22},
     "Hidrogeno":   {"H": 2},
+    "Helio":       {"He": 1},
+    "Argon":       {"Ar": 1},
     "Agua":        {"H": 2, "O": 1},
     "H2S":         {"H": 2, "S": 1},
     "CO":          {"C": 1, "O": 1},
-    "Helio":       {},
-    "Argon":       {},
     "Nitrogeno":   {"N": 2},
     "Oxigeno":     {"O": 2},
     "CO2":         {"C": 1, "O": 2},
@@ -2152,6 +2154,141 @@ def calcular_factor_compresion(fracciones_molares: dict, indice_temp: int,
         raiz_con_signo = (bj ** 0.5) if bj >= 0.0 else -((-bj) ** 0.5)
         suma += x * raiz_con_signo
     return 1.0 - (p_ref_kpa / (R_GAS * t0)) * (suma ** 2)
+
+
+def calcular_factor_compresion_suma(fracciones_molares: dict, t_metering: float,
+                                    p_ref: float = 101325.0) -> float:
+    """Z = 1 - (p_ref / 101.325 kPa) * (sum xj * sqrt(bj))^2  (metodo de factores de suma).
+
+    [CERTAIN, 2026-10-05, captura real de la app FlowXpert, libro 02] La columna "bj" de TABLA_CONSTANTES ya
+    es sqrt(bj); la columna se elige por la temperatura de medicion (0 / 15 / 20 degC; 60 degF usa la de
+    15 degC). Contra FlowXpert: ISO 6976 (1995) exacto en 16 de 16 casos; ISO 6976 (2016) entre -0.006 % y
+    +0.003 % en 15 de 16 (Wet Gas +0.11 %: el factor del agua de la edicion 2016 no esta en esta tabla).
+    `calcular_factor_compresion` (que vuelve a sacar la raiz y multiplica por p/(R*T)) llegaba a +0.43 %.
+    """
+    col = 0 if t_metering < 280.0 else (2 if t_metering > 290.0 else 1)
+    suma = 0.0
+    for c in ORDEN_COMPONENTES_APP:
+        x = fracciones_molares.get(c, 0.0)
+        if x:
+            suma += x * TABLA_CONSTANTES[c]["bj"][col]
+    return 1.0 - (p_ref / 101325.0) * suma * suma
+
+
+# [CERTAIN, 2026-10-05] Factores de suma de ISO 6976:2016 (columnas: 0, 15, 15.55 (60 degF) y 20 degC), leidos de la
+# tabla de la edicion 2016 en libFXLibrary.so (60 componentes, 0x24 bytes por fila desde 0x321784; orden de la tabla
+# confirmado con la lista de masas molares en 0x322004). Distintos de los de 1995 (ej. agua 0.3093 vs 0.2646 a 0 degC).
+# [CERTAIN, 2026-10-06] Masas molares de ISO 6976:2016 (tabla de 60 componentes de libFXLibrary.so, 0x322004,
+# 0x20 bytes por fila). La pantalla "ISO-6976 (2016)" de FlowXpert las usa con AMBOS metodos de "Molar Mass Method"
+# (Use table / Calculate): 16 de 16 capturas reales exactas (antes la app usaba las masas de 1995, ej. metano
+# 16.043 en vez de 16.04246).
+MASA_MOLAR_ISO6976_2016 = {
+    "Metano": 16.04246, "Etano": 30.06904, "Propano": 44.09562, "n-Butano": 58.1222, "i-Butano": 58.1222,
+    "n-Pentano": 72.14878, "i-Pentano": 72.14878, "neo-Pentano": 72.14878, "n-Hexano": 86.17536,
+    "n-Heptano": 100.20194, "n-Octano": 114.22852, "n-Nonano": 128.2551, "n-Decano": 142.28168,
+    "Hidrogeno": 2.01588, "Agua": 18.01528, "H2S": 34.08088, "CO": 28.0101, "Helio": 4.002602, "Argon": 39.948,
+    "Nitrogeno": 28.0134, "Oxigeno": 31.9988, "CO2": 44.0095,
+}
+
+
+def calcular_masa_molar_2016(fracciones_molares: dict) -> float:
+    """Mmix = sum(xj * Mj) con las masas molares de ISO 6976:2016 (fracciones normalizadas)."""
+    return sum(fracciones_molares.get(c, 0.0) * MASA_MOLAR_ISO6976_2016[c] for c in MASA_MOLAR_ISO6976_2016)
+
+
+# [CERTAIN, 2026-10-06] Constante de los gases de ISO 6976:2016 (libFXLibrary.so). R_GAS (8.31446) se mantiene
+# para 1995/1983, ya validadas; con 2016 la diferencia de 2.5e-7 cambia el ultimo digito de densidad/PCS/Wobbe.
+R_GAS_2016 = 8.3144621
+
+# [CERTAIN, 2026-10-06] Entalpia de vaporizacion del agua de ISO 6976:2016 [kJ/mol] por temperatura de combustion
+# (libFXLibrary.so 0x321410). Poder calorifico inferior = superior - sum(xj * (atomos H / 2) * L).
+L_AGUA_ISO6976_2016 = {0.0: 45.064, 15.0: 44.431, 15.55: 44.408, 20.0: 44.222, 25.0: 44.013}
+
+
+def calcular_poder_calorifico_molar_neto_2016(fracciones_molares: dict, t_combustion_c: float) -> float:
+    """Poder calorifico inferior molar de ISO 6976:2016 [kJ/mol] (16 de 16 capturas exactas)."""
+    hs = calcular_poder_calorifico_molar_bruto_2016(fracciones_molares, t_combustion_c)
+    lat = L_AGUA_ISO6976_2016[float(t_combustion_c)]
+    return hs - sum(x * CONTEO_ATOMICO.get(c, {}).get("H", 0) / 2.0 * lat for c, x in fracciones_molares.items())
+
+
+TABLA_SUMA_ISO6976_2016 = {
+    "Metano": [0.04886, 0.04452, 0.04437, 0.04317],
+    "Etano": [0.0997, 0.0919, 0.0916, 0.0895],
+    "Propano": [0.1465, 0.1344, 0.134, 0.1308],
+    "n-Butano": [0.2022, 0.184, 0.1834, 0.1785],
+    "i-Butano": [0.1885, 0.1722, 0.1717, 0.1673],
+    "n-Pentano": [0.2586, 0.2361, 0.2354, 0.2295],
+    "i-Pentano": [0.2458, 0.2251, 0.2244, 0.2189],
+    "neo-Pentano": [0.2245, 0.204, 0.2033, 0.1979],
+    "n-Hexano": [0.3319, 0.3001, 0.299, 0.2907],
+    "n-Heptano": [0.4076, 0.3668, 0.3654, 0.3547],
+    "n-Octano": [0.4845, 0.4346, 0.4329, 0.4198],
+    "n-Nonano": [0.5617, 0.503, 0.501, 0.4856],
+    "n-Decano": [0.6713, 0.5991, 0.5967, 0.5778],
+    "Hidrogeno": [-0.01, -0.01, -0.01, -0.01],
+    "Agua": [0.3093, 0.2562, 0.2546, 0.2419],
+    "H2S": [0.1006, 0.0923, 0.092, 0.0898],
+    "CO": [0.0258, 0.0217, 0.0215, 0.0203],
+    "Helio": [-0.01, -0.01, -0.01, -0.01],
+    "Argon": [0.0307, 0.0273, 0.0272, 0.0262],
+    "Nitrogeno": [0.0214, 0.017, 0.0169, 0.0156],
+    "Oxigeno": [0.0311, 0.0276, 0.0275, 0.0265],
+    "CO2": [0.0821, 0.0752, 0.0749, 0.073],
+}
+
+
+def calcular_factor_compresion_suma_2016(fracciones_molares: dict, t_metering: float,
+                                         p_ref: float = 101325.0) -> float:
+    """Z = 1 - (p_ref / 101.325 kPa) * (sum xj * sj)^2 con los factores de suma de ISO 6976:2016."""
+    if t_metering < 280.0:
+        col = 0
+    elif t_metering > 290.0:
+        col = 3
+    elif t_metering > 288.5:
+        col = 2  # 60 degF
+    else:
+        col = 1
+    suma = 0.0
+    for c, x in fracciones_molares.items():
+        if x:
+            suma += x * TABLA_SUMA_ISO6976_2016[c][col]
+    return 1.0 - (p_ref / 101325.0) * suma * suma
+
+
+# [CERTAIN, 2026-10-05] Poder calorifico superior molar de ISO 6976:2016 [kJ/mol] a 0, 15, 15.55 (60 degF), 20 y
+# 25 degC, leido de la tabla de la edicion 2016 en libFXLibrary.so (0x2c bytes por fila desde 0x320d04, mismo orden
+# que TABLA_SUMA_ISO6976_2016). Ej. metano 892.92 / 891.51 / 891.46 / 891.05 / 890.58.
+TABLA_HS_ISO6976_2016 = {
+    "Metano": [892.92, 891.51, 891.46, 891.05, 890.58],
+    "Etano": [1564.35, 1562.14, 1562.06, 1561.42, 1560.69],
+    "Propano": [2224.03, 2221.1, 2220.99, 2220.13, 2219.17],
+    "n-Butano": [2883.35, 2879.76, 2879.63, 2878.58, 2877.4],
+    "i-Butano": [2874.21, 2870.58, 2870.45, 2869.39, 2868.2],
+    "n-Pentano": [3542.91, 3538.6, 3538.45, 3537.19, 3535.77],
+    "i-Pentano": [3536.01, 3531.68, 3531.52, 3530.25, 3528.83],
+    "neo-Pentano": [3521.75, 3517.44, 3517.28, 3516.02, 3514.61],
+    "n-Hexano": [4203.24, 4198.24, 4198.06, 4196.6, 4194.95],
+    "n-Heptano": [4862.88, 4857.18, 4856.98, 4855.31, 4853.43],
+    "n-Octano": [5522.41, 5516.01, 5515.78, 5513.9, 5511.8],
+    "n-Nonano": [6182.92, 6175.82, 6175.56, 6173.48, 6171.15],
+    "n-Decano": [6842.69, 6834.9, 6834.62, 6832.33, 6829.77],
+    "Hidrogeno": [286.64, 286.15, 286.13, 285.99, 285.83],
+    "Agua": [45.064, 44.431, 44.408, 44.222, 44.013],
+    "H2S": [562.93, 562.38, 562.36, 562.19, 562.01],
+    "CO": [282.8, 282.91, 282.91, 282.95, 282.98],
+    "Helio": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "Argon": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "Nitrogeno": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "Oxigeno": [0.0, 0.0, 0.0, 0.0, 0.0],
+    "CO2": [0.0, 0.0, 0.0, 0.0, 0.0],
+}
+
+
+def calcular_poder_calorifico_molar_bruto_2016(fracciones_molares: dict, t_combustion_c: float) -> float:
+    """Poder calorifico superior molar [kJ/mol] con la tabla de ISO 6976:2016 (t_combustion_c: 0, 15, 15.55, 20, 25)."""
+    col = {0.0: 0, 15.0: 1, 15.55: 2, 20.0: 3, 25.0: 4}[round(t_combustion_c, 2)]
+    return sum(x * TABLA_HS_ISO6976_2016[c][col] for c, x in fracciones_molares.items() if x)
 
 
 def calcular_factor_compresion_aire(indice_temp_raw: int, p_ref: float) -> float:

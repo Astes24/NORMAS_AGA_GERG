@@ -497,7 +497,9 @@ todas las variantes base).
 ===============================================================================
 """
 
+from ._iso6976_1983_tabla import TABLA_ISO6976_1983, Z_AIRE_1983  # noqa: E402
 from .ISO_6976 import (  # noqa: F401
+    calcular_factor_compresion_suma,
     ORDEN_COMPONENTES_APP,
     TABLA_CONSTANTES,
     R_GAS,
@@ -569,6 +571,10 @@ def calcular_iso6976_1983(
     CERTAIN de `normas/ISO_6976.py` -- ver seccion 2A del docstring de este
     modulo para la validacion numerica completa contra los 7 casos reales.
     """
+    # [CERTAIN, 2026-10-06, capturas Dry Air (suma 99.9978 %) y Nordic] FlowXpert normaliza la composicion.
+    _total = sum(fracciones_molares.values())
+    if _total > 0:
+        fracciones_molares = {k: v / _total for k, v in fracciones_molares.items()}
     if indice_metering not in T_METERING_POR_INDICE_1983:
         raise ValueError(
             f"indice_metering={indice_metering!r} invalido, opciones reales: "
@@ -580,39 +586,35 @@ def calcular_iso6976_1983(
             f"{list(T_COMBUSTION_POR_INDICE_CALVAL_1983)} ({OPCIONES_CALVAL_1983})"
         )
 
-    t_metering = T_METERING_POR_INDICE_1983[indice_metering]
-    t_combustion = T_COMBUSTION_POR_INDICE_CALVAL_1983[indice_calval]
-    t_volumen = T_VOLUMEN_POR_INDICE_CALVAL_1983[indice_calval]
-    indice_hoj = INDICE_HOJ_POR_INDICE_CALVAL_1983[indice_calval]
+    # [CERTAIN, 2026-10-05] Calculo con la tabla PROPIA de ISO 6976:1983 (normas/_iso6976_1983_tabla.py), metodo
+    # de factores de suma: reproduce a la app FlowXpert real al 0.0000 % en las 5 salidas (16 casos del libro 02).
+    # Antes se usaba la tabla de ISO 6976:1995 con la formula de Z equivocada (hasta 0.14 % en Z, 0.93 % en el
+    # poder calorifico de Wet Gas). Componentes que ISO 6976:1983 no trae (n-Nonano, n-Decano): se toman de la
+    # tabla 1995 (sin caso real que los pruebe).
+    col = indice_metering  # 0 = 0 degC, 1 = 15 degC
+    t_aire = 0 if indice_metering == 0 else 15
 
-    mmix = calcular_masa_molar(fracciones_molares)
+    def fila(c):
+        return TABLA_ISO6976_1983.get(c)
 
-    # Density / Compressibility / Relative Density -- dependen SOLO de
-    # indice_metering (confirmado con Frida: 2 casos reales con distinto
-    # indice_calval pero mismo indice_metering dieron el MISMO valor en
-    # estos 3 campos, ver seccion 2A).
-    z = calcular_factor_compresion(
-        fracciones_molares, indice_temp=INDICE_BJ_1983,
-        p_ref=P_REF_PA_1983, t0=t_metering,
-    )
-    vm_ideal_metering = calcular_volumen_molar_ideal(t=t_metering, p=P_REF_PA_1983)
-    vm_real_metering = calcular_volumen_molar_real(vm_ideal_metering, z)
-    densidad_real = (mmix / 1000.0) / vm_real_metering
-    densidad_relativa = mmix * ZAIRE_SOBRE_MAIR / z
-
-    # Sup. Calorific Val. -- depende de AMBOS indices: combustion/volumen
-    # de indice_calval, Y (acoplamiento chico, ~0.04%-0.05%, ver seccion 2A)
-    # de indice_metering a traves del volumen molar real usado como base.
-    z_volumen = calcular_factor_compresion(
-        fracciones_molares, indice_temp=INDICE_BJ_1983,
-        p_ref=P_REF_PA_1983, t0=t_volumen,
-    )
-    vm_ideal_volumen = calcular_volumen_molar_ideal(t=t_volumen, p=P_REF_PA_1983)
-    vm_real_volumen = calcular_volumen_molar_real(vm_ideal_volumen, z_volumen)
-    hm_bruto = calcular_poder_calorifico_molar(
-        fracciones_molares, "bruto", indice_temp_combustion=indice_hoj,
-    )
-    poder_calorifico_volumen_bruto = (hm_bruto / vm_real_volumen) / 1000.0  # MJ/m3
+    mmix = suma_b = rho_ideal = d_ideal = hs_ideal = 0.0
+    for c, x in fracciones_molares.items():
+        if not x:
+            continue
+        f = fila(c)
+        if f is None:  # n-Nonano / n-Decano: fuera de ISO 6976:1983
+            mmix += x * TABLA_CONSTANTES[c]["Mj"]
+            suma_b += x * TABLA_CONSTANTES[c]["bj"][0 if col == 0 else 1]
+            continue
+        mmix += x * f["M"]
+        suma_b += x * f["sqrt_b"][col]
+        rho_ideal += x * f["rho_ideal"][col]
+        d_ideal += x * f["d_ideal"]
+        hs_ideal += x * f["Hs_ideal_kJ_m3"][indice_calval]
+    z = 1.0 - suma_b * suma_b
+    densidad_real = rho_ideal / z
+    densidad_relativa = d_ideal * Z_AIRE_1983[t_aire] / z
+    poder_calorifico_volumen_bruto = hs_ideal / z / 1000.0  # MJ/m3 (Z de la temperatura de medicion elegida)
 
     return {
         "Molar Mass (g/mol)": mmix,
