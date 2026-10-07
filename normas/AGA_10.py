@@ -865,8 +865,12 @@ def _termicas_aga10(composicion: dict, T_K: float, P_kPa: float, prop: dict) -> 
     cp = cp0 + (prop["Cp_J_molK"] - prop["Cp0_J_molK"])
     cv = (cp0 - R) + (prop["Cv_J_molK"] - prop["Cv0_J_molK"])
     h_real = h0 + (prop["H_J_mol"] - prop["H0_J_mol"])
-    s_real = s0 + (prop["S_J_molK"] - prop["S0_J_molK"]) + R * math.log(prop["Z"])
-    w = math.sqrt(1000.0 * cp / cv * prop["dPdD"] / Mm)
+    # [C-34] Z <= 0 (densidad de DETAIL sin sentido fisico): NaN como el C++ de FlowXpert, sin excepcion
+    s_real = s0 + (prop["S_J_molK"] - prop["S0_J_molK"]) + (R * math.log(prop["Z"]) if prop["Z"] > 0 else float("nan"))
+    # [C-34] como el C++ de FlowXpert: sqrt de un negativo (estado inestable, dP/dD < 0, que el solver de C*
+    # puede visitar de paso) da NaN en vez de detener el calculo; en esos puntos solo se usan H y S.
+    w2 = 1000.0 * cp / cv * prop["dPdD"] / Mm
+    w = math.sqrt(w2) if w2 >= 0.0 else float("nan")
     return {"Cp0": cp0 / Mm, "Cv0": (cp0 - R) / Mm, "Cp": cp / Mm, "Cv": cv / Mm, "H0": h0 / Mm,
             "H": h_real / Mm, "S": s_real / Mm, "W": w, "Kappa": w * w * Mm / (R * T_K * 1000.0 * prop["Z"]),
             "Cp_Cv": cp / cv}
@@ -1006,107 +1010,22 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         # completo del proyecto sigue siendo del usuario, no se asume
         # aqui -- pero la evidencia para hacerlo con confianza, dentro del
         # rango real de uso, ya existe.
-        _real = None
-        _errores = []
-        try:
-            from . import _aga10_xll_directo as _a10x
-            if _a10x.disponible():
-                _slots0 = _a10x._composicion_a_slots0(composicion)
-                _real = _a10x.calcular_aga10_crit_directo(_slots0, P_kPa * 1000.0, T_K)
-                metodo_critical_flow = "xll_directo_exacto"
-        except Exception as _err_xll:
-            _errores.append(f"xll_directo: {_err_xll!r}")
-            _real = None
-
-        # [CERTAIN, 2026-08-31, NUEVO] Camino intermedio: porte a Python
-        # PURO del solver `AGA10::crit` (`normas/_aga10_puro_python.py`),
-        # sin depender de ningun binario/emulador -- solo usa AGA8-DETAIL
-        # ya portado (este mismo modulo/`normas/AGA_8.py`). Se intenta
-        # DESPUES de `.xll` directo y ANTES de Unicorn, NO primero, por
-        # decision EXPLICITA basada en el barrido de validacion (ver
-        # docstring de `_aga10_puro_python.py` y
-        # `normas/_sweep_aga10_puro_python.py`): dentro del rango REAL de
-        # medicion de gas (mezclas tipicas hasta ~100degC/200bar(a)) el
-        # porte coincide 32/32 (100%) contra el oraculo `.xll directo`;
-        # ampliando a cualquier condicion "Normal" segun `validar_rango_
-        # aga10()` (incluye componentes puros y T/P menos tipicos) baja a
-        # 18/21 (85.7%) -- los 3 residuos son EXACTAMENTE los mismos 3
-        # casos (Default/GasRicoCO2/GasRicoN2 a 200degC/800bar(a)) que ya
-        # se documentaron como "Normal segun el chequeo pero caoticos en la
-        # practica" en la seccion "[CERTAIN -- 2026-08-31, NUEVO...]" de
-        # arriba. Fuera de "Normal" (ej. componentes puros pesados a
-        # 300degC/500bar, ya fuera del 'Expanded Range' oficial) el porte
-        # puede no converger (NaN explicito, nunca un numero fabricado) --
-        # tasa de exito mucho menor ahi (`.xll` directo, que ejecuta el
-        # binario real, es estrictamente mas confiable en esa zona porque
-        # no tiene una capa adicional de metodo numerico propio). Por eso
-        # NO se pone primero pese a no necesitar el `.xll` -- el propio
-        # criterio pedido ("no ponerlo primero si tiene mas fallos que el
-        # camino directo") ya decide el orden.
-        _cff_puro = None
-        if _real is None:
-            try:
-                from . import _aga10_puro_python as _a10p
-                _res_puro = _a10p.calcular_critical_flow_factor_puro(x, T_K, P_kPa)
-                if _res_puro["convergio"]:
-                    _cff = _res_puro["critical_flow_factor"]
-                    if _cff == _cff:  # descarta NaN explicito sin importar 'convergio'
-                        _cff_puro = _cff
-                        metodo_critical_flow = "puro_python_newton"
-                if _cff_puro is None:
-                    _errores.append(f"puro_python: no convergio (rango_aga10={rango_aga10['rango_combinado']!r})")
-            except Exception as _err_puro:
-                _errores.append(f"puro_python: {_err_puro!r}")
-                _cff_puro = None
-
-        if _real is None and _cff_puro is None:
-            try:
-                from . import _aga10_emulador as _a10e
-                _slots = _a10e._composicion_a_slots(composicion)
-                _real = _a10e.calcular_aga10_extended_real(_slots, P_kPa * 1000.0, T_K,
-                                                            Pb_kPa * 1000.0, Tb_K)
-                # [CERTAIN, 2026-08-04] Indicador explicito de que metodo se
-                # uso de verdad -- antes de esto, si el emulador fallaba
-                # (falta unicorn/.so en la maquina), el resultado caia en
-                # silencio al respaldo aproximado sin ninguna senal visible.
-                # Ver interfaz_calculo_flujo.py (aviso en la GUI segun el
-                # valor de este campo).
-                metodo_critical_flow = "emulador_exacto"
-            except Exception as _err_emulador:
-                # [CERTAIN, 2026-08-04 -- CAMBIO DE DISEÑO deliberado, pedido
-                # explicito del usuario] El usuario decidio que NO quiere un
-                # "plan B" aproximado disponible para Critical Flow Factor:
-                # si no se puede ejecutar el algoritmo real (extraido, no
-                # reinventado, o -- desde 2026-08-31 -- portado y validado
-                # con evidencia cuantitativa) por NINGUNO de los 3 caminos
-                # disponibles, es mejor fallar de forma explicita que
-                # entregar un numero que podria estar mal sin que se note.
-                _errores.append(f"unicorn: {_err_emulador!r}")
-                raise RuntimeError(
-                    "No se pudo ejecutar el algoritmo real de Critical Flow "
-                    "por NINGUNO de los 3 caminos disponibles (llamada "
-                    "directa a FlowXpert.xll, porte Python puro validado, "
-                    "ni emulador Unicorn del .so de Android). Por diseño, "
-                    "este sistema NO usa una formula aproximada de respaldo "
-                    "para este campo. Detalle: " + " | ".join(_errores)
-                ) from _err_emulador
-
-        if _real is not None:
-            critical_flow_factor = _real["critical_flow_factor"]
-            # Exactos (ver nota arriba) -- sobreescriben el offset empirico.
-            H0_kJ_kg = _real["H0_kJ_kg"]
-            H_kJ_kg = _real["H_kJ_kg"]
-            S_kJ_kgC = _real["S_kJ_kgC"]
-            Cp0_kJ_kgC = _real["Cp0_kJ_kgC"]
-            Cp_kJ_kgC = _real["Cp_kJ_kgC"]
-            Cv_kJ_kgC = _real["Cv_kJ_kgC"]
-        else:
-            # Camino puro_python: SOLO calcula critical_flow_factor (reusa
-            # AGA8-DETAIL, no un struct completo del motor real) -- H0/H/S/
-            # Cp0/Cp/Cv se DEJAN con el valor del offset empirico ya
-            # calculado arriba (fast path, <0.006% de error ya validado),
-            # no hay nada mejor que sobreescribirlos aqui.
-            critical_flow_factor = _cff_puro
+        # [C-34, 2026-10-06] SOLO Python puro (decision del proyecto: ninguna norma usa binarios de ABB al
+        # calcular). Se retiraron la llamada directa a FlowXpert.xll (que en Windows reemplazaba C*, H0, H, S,
+        # Cp0, Cp y Cv por los del binario) y el respaldo al emulador Unicorn (sus archivos ya no estaban en el
+        # proyecto). H0/H/S/Cp0/Cp/Cv quedan con el calculo propio de arriba (iguales a FlowXpert en el libro 01);
+        # critical_flow_factor sale del port fiel de AGA10::crit + CTherm::HS_Mode (`_aga10_crit_fx.py`, mismas
+        # semillas, limites y criterios que FlowXpert). Si no converge se falla de forma explicita, sin formula
+        # aproximada de respaldo (decision del usuario 2026-08-04).
+        from . import _aga10_crit_fx as _a10c
+        _res_puro = _a10c.critical_flow_factor(composicion, x, T_K, P_kPa)
+        critical_flow_factor = _res_puro["critical_flow_factor"]
+        if not _res_puro["convergio"] or critical_flow_factor != critical_flow_factor:
+            raise RuntimeError(
+                "Calculation error (igual que FlowXpert): el Critical Flow Factor de AGA10::crit no se puede "
+                f"calcular en estas condiciones (rango AGA-10: {rango_aga10['rango_combinado']!r}); el estado "
+                "intermedio no tiene una densidad fisica valida. No se usa formula aproximada de respaldo.")
+        metodo_critical_flow = "puro_python_aga10_crit"
     else:
         critical_flow_factor = 0.0
         isentropic_ideal_Cstar = 0.0

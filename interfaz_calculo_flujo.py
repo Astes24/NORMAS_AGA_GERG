@@ -958,13 +958,10 @@ class App(tk.Tk):
         ttk.Label(outer, text="NX-19 -- metodo SG + Poder Calorifico (pantalla 'NX-19' de la "
                               "app, con el interruptor 'PTB G9 Correction'). El motor real es "
                               "Nx19_Calc, que despacha a Z_AGA_nx19 / Z_AGA_nx19_mod / "
-                              "Z_AGA_nx19_3H segun PTB G9 y el GHV. Se ejecuta el binario REAL: "
-                              "por defecto una llamada directa (ctypes) al mismo codigo dentro de "
-                              "FlowXpert.xll (~1 ms, sin Excel), con respaldo automatico a "
-                              "emulacion de CPU (Unicorn) sobre libFXLibrary.so si el primero no "
-                              "esta disponible -- en ambos casos, resultado exacto, no aproximado. "
-                              "Ver normas/NX_19.py, normas/_nx19_xll_directo.py y "
-                              "normas/_nx19_emulador.py.",
+                              "Z_AGA_nx19_3H segun PTB G9 y el GHV. Calculo 100 % Python puro "
+                              "(porte de esas funciones, normas/NX_19_puro.py), sin binarios de ABB: "
+                              "identico al binario real y a la pantalla de FlowXpert en los casos "
+                              "validados. Ver normas/NX_19.py.",
                   font=("Segoe UI", 10, "bold"), foreground="#1F497D", wraplength=760
                   ).pack(anchor="w", pady=(4, 8))
 
@@ -1786,14 +1783,10 @@ class App(tk.Tk):
             "igual que la app real).",
             "'Critical Flow: Don't calculate (fast)' usa un offset empirico por componente para "
             "H0/H/S/Cp/Cv (los 21 componentes tienen offset propio, validado <0.02% contra 8 casos "
-            "reales -- mezclas y componentes puros). 'Calculate (slow)' ejecuta el binario real de "
-            "FlowXpert para H0/H/S/Cp/Cv Y Critical Flow Factor -- resultado EXACTO (no una "
-            "aproximacion), confirmado <0.0001% contra 7 casos reales incluyendo una mezcla. Desde "
-            "2026-08-26 el camino por defecto es una llamada directa (ctypes) al mismo codigo "
-            "dentro de FlowXpert.xll (~1-2 ms, sin Excel ni CPU emulada -- el nombre 'slow' ya no "
-            "describe el tiempo real), con respaldo automatico a la emulacion Unicorn anterior "
-            "(~11-15s) si la llamada directa no esta disponible en esta maquina. Si NINGUNO de los "
-            "2 caminos esta disponible o falla puntualmente, el calculo se detiene con un error "
+            "reales -- mezclas y componentes puros). 'Calculate (slow)' calcula ademas el Critical "
+            "Flow Factor con el porte en Python puro del solver real AGA10::crit "
+            "(normas/_aga10_puro_python.py). Todo el calculo es Python puro, sin binarios de ABB "
+            "(2026-10-06). Si el solver no converge, el calculo se detiene con un error "
             "explicito -- "
             "por decision deliberada, este sistema NO tiene una formula aproximada de respaldo "
             "para Critical Flow Factor (existio una version anterior basada en NASA TM X-2308 "
@@ -2049,7 +2042,7 @@ class App(tk.Tk):
         # actualizacion de resultados en el hilo principal cuando termina.
         self.aga10_calc_button.config(state="disabled")
         for var in self.aga10_result_vars.values():
-            var.set("Calculando... (normalmente <1s; hasta ~11s si usa el respaldo Unicorn)")
+            var.set("Calculando...")
         self.aga10_advertencia_critflow_var.set("")
 
         def _trabajo_en_hilo():

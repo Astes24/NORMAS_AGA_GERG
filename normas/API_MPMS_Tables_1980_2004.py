@@ -5886,7 +5886,7 @@ def api_dens15c_ngl_lpg(observed_density_kgm3: float, observed_temp_c: float,
                          p100_correlacion: int = 0, p100_valor: float = 0.0,
                          round_11_2_4: int = 0, round_11_2_2m: int = 0,
                          round_tp15: int = 0,
-                         conversion: int = 1, usar_xll_si_disponible: bool = False) -> dict:
+                         conversion: int = 1) -> dict:
     """Densidad(T,P) <-> Densidad(15°C, EVP). "API Density @15°C NGL/LPG"
     (API 11.2.4 / GPA TP-27 + API MPMS 11.2.2M + GPA TP-15).
 
@@ -5915,15 +5915,7 @@ def api_dens15c_ngl_lpg(observed_density_kgm3: float, observed_temp_c: float,
     extremo del rango oficial -- densidad cerca del minimo de la tabla,
     350 kg/m3, combinada con temperatura alta, ~55°C -- zona ya conocida
     como numericamente fragil en el resto de este proyecto, ver docstring
-    de `_ngl_lpg_wrappers_puro.py`). `usar_xll_si_disponible=True` (default
-    `False`) es un ATAJO OPCIONAL: si `FlowXpert.xll`/`pefile` estan
-    disponibles, llama en su lugar a
-    `_ngl_lpg_wrappers_xll_directo.calcular_dens15c_ngl_lpg_directo`
-    (ctypes, sin Excel/emulador) -- NUNCA es el default, siguiendo la
-    politica de este proyecto de cero dependencia de binario en produccion
-    (ver `feedback-preferencia-python-puro.md` en la memoria del proyecto);
-    si se pide y el `.xll` no esta disponible, se cae de vuelta al puro
-    silenciosamente (nunca lanza `RuntimeError` por esto).
+    de `_ngl_lpg_wrappers_puro.py`). [C-34] sin opcion de binario: la app calcula solo en Python puro (se retiro el atajo opcional a FlowXpert.xll).
 
     `conversion`: 1=Observed->Standard(15°C) (default, `observed_density_kgm3`
     es la densidad OBSERVADA y el resultado `density_15c` es la densidad
@@ -5931,24 +5923,14 @@ def api_dens15c_ngl_lpg(observed_density_kgm3: float, observed_temp_c: float,
     realidad la densidad a 15°C de entrada, y `density_15c` en el resultado
     es en realidad la densidad OBSERVADA resultante -- mismo campo, sentido
     invertido, igual que expone la pantalla real)."""
-    r = None
-    if usar_xll_si_disponible:
-        from . import _ngl_lpg_wrappers_xll_directo as _wx
-        if _wx.disponible():
-            r = _wx.calcular_dens15c_ngl_lpg_directo(
-                densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
-                round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
-                evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
-                round_tp15=round_tp15,
-                p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
-    if r is None:
-        from . import _ngl_lpg_wrappers_puro as _wp
-        r = _wp.calcular_dens15c_ngl_lpg_puro(
-            densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
-            round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
-            evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
-            round_tp15=round_tp15,
-            p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
+    from . import _ngl_lpg_wrappers_puro as _wp
+    # [C-34] solo Python puro
+    r = _wp.calcular_dens15c_ngl_lpg_puro(
+        densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
+        round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
+        evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
+        round_tp15=round_tp15,
+        p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
     return {"density_15c": r["x_kgm3"], "ctl": r["ctl"], "cpl": r["cpl"],
             "ctpl": r["ctpl"], "f": r["compressibility_1_bar"],
             "equilibrium_pressure_barg": r["evp_barg"],
@@ -5962,10 +5944,10 @@ def api_dens20c_ngl_lpg(observed_density_kgm3: float, observed_temp_c: float,
                          p100_correlacion: int = 0, p100_valor: float = 0.0,
                          round_11_2_4: int = 0, round_11_2_2m: int = 0,
                          round_tp15: int = 0,
-                         conversion: int = 1, usar_xll_si_disponible: bool = False) -> dict:
+                         conversion: int = 1) -> dict:
     """Densidad(T,P) <-> Densidad(20°C, EVP). "API Density @20°C NGL/LPG".
     Mismo motor que `api_dens15c_ngl_lpg` con referencia 20°C -- ver ese
-    docstring para el significado de `conversion`/`usar_xll_si_disponible`/
+    docstring para el significado de `conversion`/
     `round_tp15` (RONDA 36).
 
     [ACTUALIZADO, RONDA "NGL/LPG puro" 2026-09-03] Camino PRINCIPAL: 100%
@@ -5976,24 +5958,14 @@ def api_dens20c_ngl_lpg(observed_density_kgm3: float, observed_temp_c: float,
     hallazgo real de esta ronda (CPL siempre se evalua con la densidad
     equivalente a 15°C, incluso en esta pantalla de 20°C -- confirmado
     leyendo `FUN_1800e7304`)."""
-    r = None
-    if usar_xll_si_disponible:
-        from . import _ngl_lpg_wrappers_xll_directo as _wx
-        if _wx.disponible():
-            r = _wx.calcular_dens20c_ngl_lpg_directo(
-                densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
-                round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
-                evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
-                round_tp15=round_tp15,
-                p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
-    if r is None:
-        from . import _ngl_lpg_wrappers_puro as _wp
-        r = _wp.calcular_dens20c_ngl_lpg_puro(
-            densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
-            round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
-            evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
-            round_tp15=round_tp15,
-            p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
+    from . import _ngl_lpg_wrappers_puro as _wp
+    # [C-34] solo Python puro
+    r = _wp.calcular_dens20c_ngl_lpg_puro(
+        densidad_kgm3=observed_density_kgm3, t_c=observed_temp_c, p_barg=pressure_bar_g,
+        round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
+        evp_mode=equilibrium_pressure_mode, evp_input_barg=equilibrium_pressure_bar_g,
+        round_tp15=round_tp15,
+        p100_correlacion=p100_correlacion, p100_valor=p100_valor, conversion=conversion)
     return {"density_20c": r["x_kgm3"], "ctl": r["ctl"], "cpl": r["cpl"],
             "ctpl": r["ctpl"], "f": r["compressibility_1_bar"],
             "equilibrium_pressure_barg": r["evp_barg"],
@@ -6006,7 +5978,7 @@ def api_rd60f_ngl_lpg(observed_rd: float, observed_temp_f: float,
                        p100_correlacion: int = 0, p100_valor_psia: float = 0.0,
                        round_11_2_4: int = 0, round_11_2_2: int = 0,
                        round_tp15: int = 0,
-                       conversion: int = 1, usar_xll_si_disponible: bool = False) -> dict:
+                       conversion: int = 1) -> dict:
     """RD(T,P) <-> RD(60°F, EVP). "API Rel. Density @60°F NGL/LPG" (API
     11.2.4 / GPA TP-27 Tables 23E/24E + API MPMS 11.2.2 + GPA TP-15, sistema
     US -- unica pantalla US-nativa de esta familia, confirmado por los
@@ -6020,9 +5992,7 @@ def api_rd60f_ngl_lpg(observed_rd: float, observed_temp_f: float,
     9.020282 bar(a)) y por barrido masivo contra el oraculo `.xll`: 94.3%
     de 980 casos (las fallas caen en el borde extremo del rango oficial,
     RD=0.35 con T>=90°F -- zona donde ademas se corrigio un clamp faltante
-    en `api_mpms_11_2_2`, ver docstring de esa funcion). Ver docstring de
-    `api_dens15c_ngl_lpg` para el significado de `usar_xll_si_disponible`
-    (mismo patron, default `False`, ATAJO opcional, nunca produccion).
+    en `api_mpms_11_2_2`, ver docstring de esa funcion). [C-34] sin opcion de binario: la app calcula solo en Python puro.
 
     `conversion`: 1=Observed->Standard(60°F) (default, caso real validado),
     0=Standard(60°F)->Observed (mismo campo `observed_rd`/`rd_60f` en
@@ -6031,26 +6001,15 @@ def api_rd60f_ngl_lpg(observed_rd: float, observed_temp_f: float,
     [RONDA 36 (2026-09-09)] `round_tp15` ("GPA TP-15 Rounding" de la
     pantalla real) -- ver docstring de `api_dens15c_ngl_lpg` para el
     detalle completo (mismo parametro, misma conexion antes ausente)."""
-    r = None
-    if usar_xll_si_disponible:
-        from . import _ngl_lpg_wrappers_xll_directo as _wx
-        if _wx.disponible():
-            r = _wx.calcular_rd60f_ngl_lpg_directo(
-                rd=observed_rd, t_f=observed_temp_f, p_psia=pressure_psia,
-                round_11_2_4=round_11_2_4, round_11_2_2=round_11_2_2,
-                evp_mode=equilibrium_pressure_mode, evp_input_psia=equilibrium_pressure_psia,
-                round_tp15=round_tp15,
-                p100_correlacion=p100_correlacion, p100_valor_psia=p100_valor_psia,
-                conversion=conversion, atm_psia=atm_psia)
-    if r is None:
-        from . import _ngl_lpg_wrappers_puro as _wp
-        r = _wp.calcular_rd60f_ngl_lpg_puro(
-            rd=observed_rd, t_f=observed_temp_f, p_psia=pressure_psia,
-            round_11_2_4=round_11_2_4, round_11_2_2=round_11_2_2,
-            evp_mode=equilibrium_pressure_mode, evp_input_psia=equilibrium_pressure_psia,
-            round_tp15=round_tp15,
-            p100_correlacion=p100_correlacion, p100_valor_psia=p100_valor_psia,
-            conversion=conversion, atm_psia=atm_psia)
+    from . import _ngl_lpg_wrappers_puro as _wp
+    # [C-34] solo Python puro
+    r = _wp.calcular_rd60f_ngl_lpg_puro(
+        rd=observed_rd, t_f=observed_temp_f, p_psia=pressure_psia,
+        round_11_2_4=round_11_2_4, round_11_2_2=round_11_2_2,
+        evp_mode=equilibrium_pressure_mode, evp_input_psia=equilibrium_pressure_psia,
+        round_tp15=round_tp15,
+        p100_correlacion=p100_correlacion, p100_valor_psia=p100_valor_psia,
+        conversion=conversion, atm_psia=atm_psia)
     return {"rd_60f": r["rd_std"], "ctl": r["ctl"], "cpl": r["cpl"],
             "ctpl": r["ctpl"], "f": r["compressibility_1_psi"],
             "equilibrium_pressure_psia": r["evp_psia"],

@@ -16,16 +16,9 @@ diseno ya establecida en todo el proyecto (ver `normas/AGA_10_puro.py`,
 `normas/NX_19_puro.py`): produccion en Python puro, sin depender de
 `ctypes`/`pefile`/Windows.
 
-CAMINO OPCIONAL: llamada DIRECTA (ctypes, sin Excel, sin emulador) al
-binario real `FlowXpert.xll` (ver `normas/_ethylene_propylene_xll_directo.py`
-para la evidencia de decompilacion/validacion original) -- solo se usa si
-se pasa `usar_xll=True` explicitamente, pensado para revalidar/depurar
-contra el oraculo real durante desarrollo, NUNCA necesario para el uso
-normal de estas funciones. Si se pide `usar_xll=True` pero el binario o
-`pefile` no estan disponibles en la maquina (ej. despliegue Linux/web), o
-el binario devuelve un codigo de error, se cae automaticamente al porte
-puro (con las mismas garantias de "nunca fabricar un numero": si el porte
-puro tampoco converge, se lanza RuntimeError explicito).
+[C-34, 2026-10-06] Sin camino opcional a binarios: se retiro la llamada directa a FlowXpert.xll
+(parametro `usar_xll`); ninguna norma usa binarios de ABB al calcular. Para revalidar contra el
+binario se usan las herramientas de CONFIRMACION DE CALCULOS, fuera de la app.
 
 No hay camino de respaldo tipo emulador Unicorn para esta familia (la
 Ronda 1 sobre el `.so` de Android solo llego a decompilacion ESTRUCTURAL,
@@ -45,18 +38,13 @@ from .API_Ethylene_Propylene_puro import (
 
 
 def api_mpms_11_3_2_1_ethylene(temp_f: float, pressure_psia: float,
-                                api_rounding: int = 0, usar_xll: bool = False) -> dict:
+                                api_rounding: int = 0) -> dict:
     """Densidad y compresibilidad (Z) de Etileno (C2H4) segun API MPMS
     11.3.2.1.
 
     temp_f: temperatura en grados Fahrenheit. pressure_psia: presion
     absoluta en psia. api_rounding: 0 o 1 (flag "API Rounding" de la UI
-    real). usar_xll: si True, intenta primero la llamada DIRECTA al
-    binario real `FlowXpert.xll` (solo Windows, requiere `pefile`) en vez
-    del porte Python puro -- pensado UNICAMENTE para revalidar/depurar
-    contra el oraculo original; si el binario no esta disponible o
-    devuelve error, cae automaticamente al porte puro sin avisar (no es un
-    fallo, es el comportamiento esperado en un despliegue sin `.xll`).
+    real). [C-34] sin opcion de binario: la app calcula solo en Python puro.
 
     [CERTAIN, camino puro (default), ver `API_Ethylene_Propylene_puro.py`]
     Validado 100% exacto (8008/8008 casos) contra el oraculo `.xll` dentro
@@ -68,20 +56,6 @@ def api_mpms_11_3_2_1_ethylene(temp_f: float, pressure_psia: float,
     Lanza RuntimeError SOLO si el porte puro no converge para esta T/P (ver
     `aviso` interno para el detalle) -- condicion extrema, ver "NIVEL DE
     CONFIANZA" en el docstring de `API_Ethylene_Propylene_puro.py`."""
-    if usar_xll:
-        try:
-            from . import _ethylene_propylene_xll_directo as _epx
-            if _epx.disponible():
-                r = _epx.calcular_ethylene_directo(temp_f, pressure_psia, api_rounding)
-                if r["ok"]:
-                    return {
-                        "density_kg_m3": r["density_kg_m3"],
-                        "z": r["z"],
-                        "fuera_de_rango": r["fuera_de_rango"],
-                    }
-        except Exception:
-            pass  # cae al porte puro, ver docstring
-
     r = api_mpms_11_3_2_1_ethylene_puro(temp_f, pressure_psia, api_rounding)
     if not r["convergio"]:
         raise RuntimeError(
@@ -96,14 +70,12 @@ def api_mpms_11_3_2_1_ethylene(temp_f: float, pressure_psia: float,
 
 
 def api_mpms_11_3_3_2_propylene(temp_f: float, pressure_psia: float,
-                                 api_rounding: int = 0, usar_xll: bool = False) -> dict:
+                                 api_rounding: int = 0) -> dict:
     """Densidad de Propileno Liquido (CTPL, Equilibrium Pressure incluidos)
     segun API MPMS 11.3.3.2.
 
     temp_f: temperatura en grados Fahrenheit. pressure_psia: presion
-    absoluta en psia. api_rounding: 0 o 1. usar_xll: ver docstring de
-    `api_mpms_11_3_2_1_ethylene()` -- mismo comportamiento (opcional, solo
-    para revalidar contra el binario real).
+    absoluta en psia. api_rounding: 0 o 1. [C-34] sin opcion de binario: la app calcula solo en Python puro.
 
     [CERTAIN, camino puro (default), ver `API_Ethylene_Propylene_puro.py`]
     Validado 100% exacto (7472/7472 casos) contra el oraculo `.xll` dentro
@@ -119,21 +91,6 @@ def api_mpms_11_3_3_2_propylene(temp_f: float, pressure_psia: float,
     Devuelve dict con density_kg_m3, ctpl, equilibrium_pressure_bar,
     fuera_de_rango (bool). Lanza RuntimeError SOLO si el porte puro no
     converge para esta T/P."""
-    if usar_xll:
-        try:
-            from . import _ethylene_propylene_xll_directo as _epx
-            if _epx.disponible():
-                r = _epx.calcular_propylene_directo(temp_f, pressure_psia, api_rounding)
-                if r["ok"]:
-                    return {
-                        "density_kg_m3": r["density_kg_m3"],
-                        "ctpl": r["ctpl"],
-                        "equilibrium_pressure_bar": r["equilibrium_pressure_bar"],
-                        "fuera_de_rango": r["fuera_de_rango"],
-                    }
-        except Exception:
-            pass  # cae al porte puro, ver docstring
-
     r = api_mpms_11_3_3_2_propylene_puro(temp_f, pressure_psia, api_rounding)
     if not r["convergio"]:
         raise RuntimeError(
