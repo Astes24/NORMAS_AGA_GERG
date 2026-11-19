@@ -1600,7 +1600,7 @@ def _density_2004_kgm3_to_rd60(rho_kgm3: float) -> float:
 # (oor1) real Y el resultado final en el 100% de ~75 puntos de barrido (3
 # dominios x 2 direcciones x ~12-25 puntos cada uno cruzando cada frontera).
 _AUTO_SELECT_NOTA = (
-    "product=2 (B - Auto select) ya NO esta soportado -- ver RONDA 49."
+    "product=2 (B - Auto select) no esta soportado."
 )
 
 
@@ -1773,10 +1773,10 @@ def _round_comercial_n(y: float, n: int) -> float:
     """round half away from zero a n decimales -- replica exacta de
     `FUN_1800e1db4(y, n)` (ya [CERTAIN] desde Ronda 13/27): floor(y*10^n+0.5)/10^n
     para y>=0, ceil(y*10^n-0.5)/10^n para y<0."""
-    scale = 10.0 ** n
-    if y >= 0:
-        return math.floor(scale * y + 0.5) / scale
-    return math.ceil(scale * y - 0.5) / scale
+    # C-56 (2026-11-19): igual que `_round_n` (C-36), el binario multiplica por el inverso
+    # (FUN_1800e1bc8: 0.1, 0.01, ...) en vez de dividir por 10^n; dividir daba 1 ulp distinto
+    # (p. ej. 0.5065 contra 0.5065000000000001 en Table-23E con API Rounding).
+    return _round_n(y, n)
 
 
 def _trunc_hacia_cero_n(y: float, n: int) -> float:
@@ -2048,6 +2048,1063 @@ def _iterar_api2540_cascade(k: _K, rho_fixed: float, t_r: float, delta_t: float,
 
 
 # ===========================================================================
+# [C-41, 2026-11-18] API MPMS 11.1 (1980): replica literal de los nucleos
+# iterativos de FlowXpert.xll (Table5/23/53 1980) y de los 3 nucleos
+# combinados con presion (API_Dens15C_1980 / API_Gravity60F_1980 /
+# API_RD60F_1980), con sus banderas de rango y codigos de estado.
+# Fuente: decompilacion Ghidra de FUN_1800e4f94/e404c/e4450/e4b80 (Table5),
+# FUN_1800eb1f8/e9a68/e9f48/ea5cc (Table23), FUN_1800edc80/ec9cc/ececc/ed634
+# (Table53), FUN_1800e62d4/e79e4/e8494 (combinadas), funciones de rango
+# FUN_1800e5738/e4a98/e5dd8/e9e2c/ebcfc/ea998/ecdb0/ed540/eea28 y
+# redondeo/truncado FUN_1800e1db4/e1e14/e1bc8. Constantes DAT_ leidas del
+# binario. Python puro: no llama al .xll.
+# ===========================================================================
+_FX80_OK, _FX80_RANGO, _FX80_ERRCALC, _FX80_EXTRAP = 0x2A, 0x2B, 0x2C, 0x2E
+_FX80_INF = float("inf")
+
+
+def _fx80_esc(n: int):
+    """FUN_1800e1bc8: multiplicador e inverso tal como los arma el binario
+    (literales 10/100/1000/10000 y 0.1/0.01/0.001/0.0001, y por cada 4
+    decimales extra *1e4 y *1e-4). El inverso NO es 10**-n exacto."""
+    if n == 0:
+        return 1.0, 1.0
+    r = (n - 1) & 3
+    mult = (10.0, 100.0, 1000.0, 10000.0)[r]
+    inv = (0.1, 0.01, 0.001, 0.0001)[r]
+    for _ in range((n - 1) >> 2):
+        mult *= 10000.0
+        inv *= 0.0001
+    return mult, inv
+
+
+def _fx80_r(y: float, n: int) -> float:
+    """FUN_1800e1db4(y, n): redondeo mitad-lejos-de-cero, multiplicando por el inverso."""
+    if y != y or y in (_FX80_INF, -_FX80_INF):
+        return y
+    mult, inv = _fx80_esc(n)
+    if y >= 0.0:
+        return math.floor(mult * y + 0.5) * inv
+    return math.ceil(mult * y - 0.5) * inv
+
+
+def _fx80_t(y: float, n: int) -> float:
+    """FUN_1800e1e14(y, n): truncado hacia cero, multiplicando por el inverso."""
+    if y != y or y in (_FX80_INF, -_FX80_INF):
+        return y
+    mult, inv = _fx80_esc(n)
+    if y >= 0.0:
+        return math.floor(mult * y) * inv
+    return math.ceil(mult * y) * inv
+
+
+def _fx80_div(a: float, b: float) -> float:
+    """Division IEEE (como el binario): x/0 -> +-inf, 0/0 -> NaN, sin excepcion."""
+    if b == 0.0:
+        if a == 0.0 or a != a:
+            return float("nan")
+        return math.copysign(_FX80_INF, a) * math.copysign(1.0, b)
+    return a / b
+
+
+def _fx80_exp(x: float) -> float:
+    try:
+        return math.exp(x)
+    except OverflowError:
+        return _FX80_INF
+
+
+def _fx80_finito(x: float) -> bool:
+    return not (x != x or x in (_FX80_INF, -_FX80_INF))
+
+
+# ---------------------------------------------------------------------------
+# Funciones de rango (devuelven 0x2a dentro, 0x2b fuera, 0x2e extrapolado).
+# ---------------------------------------------------------------------------
+def _fx80_rango_t53_crudo(d, t):          # FUN_1800ecdb0
+    lim = 95.0
+    if not (610.5 <= d < 758.0):
+        if not (758.0 <= d < 778.5):
+            if not (778.5 <= d < 824.0):
+                if d < 824.0 or 1075.0 < d:
+                    return _FX80_RANGO
+                if -18.0 <= t <= 120.0:
+                    return _FX80_OK
+                if t <= 120.0 or 150.0 < t:
+                    return _FX80_RANGO
+                return _FX80_EXTRAP
+            if -18.0 <= t <= 90.0:
+                return _FX80_OK
+            lim = 125.0
+            if t <= 90.0:
+                return _FX80_RANGO
+        else:
+            if -18.0 <= t <= 60.0:
+                return _FX80_OK
+            if t <= 60.0:
+                return _FX80_RANGO
+    else:
+        if t < -18.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t53_b(d, t):              # FUN_1800ed540
+    if not (653.0 <= d < 778.5):
+        if not (778.5 <= d < 824.0):
+            if d < 824.0 or 1075.0 < d:
+                return _FX80_RANGO
+            if -18.0 <= t <= 120.0:
+                return _FX80_OK
+            if t <= 120.0 or 150.0 < t:
+                return _FX80_RANGO
+            return _FX80_EXTRAP
+        if -18.0 <= t <= 90.0:
+            return _FX80_OK
+        lim = 125.0
+        if t <= 90.0:
+            return _FX80_RANGO
+    else:
+        if -18.0 <= t <= 60.0:
+            return _FX80_OK
+        lim = 95.0
+        if t <= 60.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t53_lube(d, t):           # FUN_1800eea28
+    return _FX80_OK if (800.0 <= d <= 1164.0 and -20.0 <= t <= 150.0) else _FX80_RANGO
+
+
+def _fx80_rango_t5_crudo(a, t):           # FUN_1800e5738
+    if a < 0.0 or 40.0 < a:
+        if a <= 40.0 or 50.0 < a:
+            if a <= 50.0 or 55.0 < a:
+                if a <= 55.0 or 100.0 < a:
+                    return _FX80_RANGO
+                if t < 0.0 or 200.0 < t:
+                    return _FX80_RANGO
+                return _FX80_EXTRAP
+            if 0.0 <= t <= 150.0:
+                return _FX80_OK
+            lim = 200.0
+            if t <= 150.0:
+                return _FX80_RANGO
+        else:
+            if 0.0 <= t <= 200.0:
+                return _FX80_OK
+            lim = 250.0
+            if t <= 200.0:
+                return _FX80_RANGO
+    else:
+        if 0.0 <= t <= 250.0:
+            return _FX80_OK
+        lim = 300.0
+        if t <= 250.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t5_b(a, t):               # FUN_1800e4a98
+    if a < 0.0 or 40.0 < a:
+        if a <= 40.0 or 50.0 < a:
+            if a <= 50.0 or 85.0 < a:
+                return _FX80_RANGO
+            if 0.0 <= t <= 150.0:
+                return _FX80_OK
+            if t <= 150.0 or 200.0 < t:
+                return _FX80_RANGO
+            return _FX80_EXTRAP
+        if 0.0 <= t <= 200.0:
+            return _FX80_OK
+        lim = 250.0
+        if t <= 200.0:
+            return _FX80_RANGO
+    else:
+        if 0.0 <= t <= 250.0:
+            return _FX80_OK
+        lim = 300.0
+        if t <= 250.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t5_lube(a, t):            # FUN_1800e5dd8
+    return _FX80_OK if (-10.0 <= a <= 45.0 and 0.0 <= t <= 300.0) else _FX80_RANGO
+
+
+def _fx80_rango_t23_crudo(r, t):          # FUN_1800e9e2c
+    lim = 200.0
+    if not (0.611 <= r < 0.7585):
+        if not (0.7585 <= r < 0.7795):
+            if not (0.7795 <= r < 0.825):
+                if r < 0.825 or 1.076 < r:
+                    return _FX80_RANGO
+                if 0.0 <= t <= 250.0:
+                    return _FX80_OK
+                if t <= 250.0 or 300.0 < t:
+                    return _FX80_RANGO
+                return _FX80_EXTRAP
+            if 0.0 <= t <= 200.0:
+                return _FX80_OK
+            lim = 250.0
+            if t <= 200.0:
+                return _FX80_RANGO
+        else:
+            if 0.0 <= t <= 150.0:
+                return _FX80_OK
+            if t <= 150.0:
+                return _FX80_RANGO
+    else:
+        if t < 0.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t23_b(r, t):              # FUN_1800ebcfc
+    if not (0.6535 <= r < 0.7795):
+        if not (0.7795 <= r < 0.825):
+            if r < 0.825 or 1.076 < r:
+                return _FX80_RANGO
+            if 0.0 <= t <= 250.0:
+                return _FX80_OK
+            if t <= 250.0 or 300.0 < t:
+                return _FX80_RANGO
+            return _FX80_EXTRAP
+        if 0.0 <= t <= 200.0:
+            return _FX80_OK
+        lim = 250.0
+        if t <= 200.0:
+            return _FX80_RANGO
+    else:
+        if 0.0 <= t <= 150.0:
+            return _FX80_OK
+        lim = 200.0
+        if t <= 150.0:
+            return _FX80_RANGO
+    if lim < t:
+        return _FX80_RANGO
+    return _FX80_EXTRAP
+
+
+def _fx80_rango_t23_lube(r, t):           # FUN_1800ea998
+    return (_FX80_OK if (0.8007911816875073 <= r <= 1.1651511693553231 and 0.0 <= t <= 300.0)
+            else _FX80_RANGO)
+
+
+# ---------------------------------------------------------------------------
+# Piezas comunes de los nucleos iterativos
+# ---------------------------------------------------------------------------
+_FX80_K_US = {"crudo": (341.0957, 0.0, 0.0), "lube": (0.0, 0.34878, 0.0),
+              "G": (192.4571, 0.2438), "J": (330.301, 0.0), "F": (103.872, 0.2701),
+              "T": (1489.067, 0.0, -0.0018684)}
+_FX80_K_M = {"crudo": (613.9723, 0.0, 0.0), "lube": (0.0, 0.6278, 0.0),
+             "G": (346.4228, 0.4388), "J": (594.5418, 0.0), "F": (186.9696, 0.4862),
+             "T": (2680.3206, 0.0, -0.00336312)}
+
+
+def _fx80_hidrometro(d_t, coef_a, coef_b, rnd):
+    a = d_t * coef_a
+    b = d_t * d_t * coef_b
+    if rnd:
+        a = _fx80_r(a, 9)
+        b = _fx80_r(b, 9)
+    return (1.0 - a) - b
+
+
+def _fx80_alpha_std(k0, k1, rho, rnd, forma):
+    """alpha con K0/K1. `forma` = orden de las operaciones sin redondeo de cada nucleo."""
+    if rnd:
+        a1 = _fx80_t(_fx80_div(k0, rho), 8)
+        a1 = _fx80_t(_fx80_div(a1, rho), 10)
+        a2 = _fx80_t(_fx80_div(k1, rho), 10)
+        return _fx80_r(a2 + a1, 7)
+    if forma == "k0_rr":        # (K0/rho)/rho + K1/rho
+        return _fx80_div(_fx80_div(k0, rho), rho) + _fx80_div(k1, rho)
+    if forma == "k0_r2":        # K0/(rho*rho) + K1/rho
+        return _fx80_div(k0, rho * rho) + _fx80_div(k1, rho)
+    if forma == "k1_k0r2":      # K1/rho + K0/(rho*rho)
+        return _fx80_div(k1, rho) + _fx80_div(k0, rho * rho)
+    if forma == "k1_k0rr":      # (K0/(rho*rho))/rho + K1/rho  (lube Table23)
+        return _fx80_div(_fx80_div(k0, rho * rho), rho) + _fx80_div(k1, rho)
+    if forma == "k1_k0r2b":     # K1/rho + K0/(rho*rho)   (lube Table5)
+        return _fx80_div(k1, rho) + _fx80_div(k0, rho * rho)
+    raise ValueError(forma)
+
+
+def _fx80_alpha_trans(kt0, kt2, rho, rnd):
+    if rnd:
+        a = _fx80_t(_fx80_div(kt0, rho), 6)
+        a = _fx80_r(_fx80_div(a, rho), 8)
+        return _fx80_r(a + kt2, 7)
+    return _fx80_div(_fx80_div(kt0, rho), rho) + kt2
+
+
+def _fx80_ctl(d_t, alpha, rnd, dec, z_trunc, e_trunc):
+    """CTL de los nucleos iterativos. Sin redondeo: exp(-(x*0.8*x) - x).
+    Con redondeo: x=trunc(dT*a,dec), y=trunc(x*0.8,dec), z=round|trunc(x*y,dec),
+    e=-z-x (truncado a 8 en Table53), CTL=round(exp(e),6)."""
+    if not rnd:
+        x = d_t * alpha
+        return _fx80_exp(-(x * 0.8 * x) - x)
+    x = _fx80_t(d_t * alpha, dec)
+    y = _fx80_t(x * 0.8, dec)
+    z = _fx80_t(x * y, dec) if z_trunc else _fx80_r(x * y, dec)
+    e = -z - x
+    if e_trunc:
+        e = _fx80_t(e, 8)
+    return _fx80_r(_fx80_exp(e), 6)
+
+
+def _fx80_bucle(obs, rho, tol, cuenta, rnd, alpha_de, ctl_de):
+    """do { ... } while (cuenta < 100 && diff > tol). Devuelve rho, alpha, ctl, cuenta."""
+    alpha = ctl = None
+    while True:
+        prev = rho
+        alpha = alpha_de(prev)
+        ctl = ctl_de(alpha)
+        rho = _fx80_div(obs, ctl)
+        if rnd:
+            rho = _fx80_t(rho, 3)
+        diff = abs(prev - rho)
+        cuenta += 1
+        if not (cuenta < 100 and diff > tol):
+            return rho, alpha, ctl, cuenta
+
+
+# ---------------------------------------------------------------------------
+# Table53 1980 (metrico): FUN_1800edc80 -> ec9cc / ececc / ed634
+# ---------------------------------------------------------------------------
+def _fx80_t53(dens, temp_c, producto, rnd, hidro):
+    rnd = bool(rnd)
+    if producto not in (1, 2, 3, 4, 5, 6, 7):
+        return {"rc": _FX80_RANGO}
+    kk = _FX80_K_M
+    if producto in (1, 7):
+        if producto == 7 and (dens == 0.0 or not _fx80_finito(dens)):
+            return {"rc": _FX80_RANGO}
+        p1, p2 = dens, temp_c
+        if rnd:
+            p1 = _fx80_r(p1 * 2.0, 0) * 0.5
+            p2 = _fx80_r(p2 * 2.0, 1) * 0.5
+        if producto == 1 and (p1 == 0.0 or not _fx80_finito(p1)):
+            return {"rc": _FX80_RANGO}
+        rango = _fx80_rango_t53_crudo if producto == 1 else _fx80_rango_t53_lube
+        oor = 1 if rango(p1, p2) == _FX80_RANGO else 0
+        d_t = p2 - 15.0
+        hyd = _fx80_hidrometro(d_t, 2.3e-05, 2e-08, rnd) if hidro else 1.0
+        obs = p1 * hyd
+        if rnd:
+            obs = _fx80_r(obs, 2)
+        k0, k1, k2 = kk["crudo"] if producto == 1 else kk["lube"]
+        forma = "k0_rr" if producto == 1 else "k1_k0rr"
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, obs, 0.05 if rnd else 1e-05, 0, rnd,
+            lambda r: _fx80_alpha_std(k0, k1, r, rnd, forma),
+            lambda a: _fx80_ctl(d_t, a, rnd, 9, False, True))
+        if rho == 0.0 or not _fx80_finito(rho):
+            return {"rc": _FX80_ERRCALC, "cuenta": cuenta}
+        if rnd:
+            rho = _fx80_r(rho, 3)
+        if rango(rho, p2) == _FX80_RANGO:
+            oor = 1
+        return {"rc": _FX80_OK, "cuenta": cuenta, "base": rho, "ctl": ctl, "alpha": alpha,
+                "k0": k0, "k1": k1, "k2": k2, "producto": producto, "oor": oor}
+    # grupo B (2..6): FUN_1800ececc
+    if dens == 0.0 or not _fx80_finito(dens):
+        return {"rc": _FX80_RANGO}
+    iv4 = {2: 0, 3: 1, 4: 2, 5: 3, 6: 4}[producto]
+    p1, p2 = dens, temp_c
+    if rnd:
+        p1 = _fx80_r(p1 * 2.0, 0) * 0.5
+        p2 = _fx80_r(p2 * 2.0, 1) * 0.5
+    oor = 1 if _fx80_rango_t53_b(p1, p2) == _FX80_RANGO else 0
+    d_t = p2 - 15.0
+    hyd = _fx80_hidrometro(d_t, 2.3e-05, 2e-08, rnd) if hidro else 1.0
+    obs = p1 * hyd
+    if rnd:
+        obs = _fx80_r(obs, 2)
+    rho, cuenta, estandar, tol = obs, 0, True, (0.05 if rnd else 1e-05)
+    region = {0: "F", 1: "J", 2: "G"}
+    iv5, k0, k1, fijo = 0, 0.0, 0.0, False
+    while True:
+        if iv4 == 0:
+            iv5 = (0 if p1 >= 839.0 else 1) if p1 >= 779.0 else 2
+            fijo = False
+        else:
+            fijo = True
+            if iv4 == 1:
+                iv5 = 2
+            elif iv4 == 2:
+                iv5, estandar = 0, False
+            elif iv4 == 3:
+                iv5 = 1
+            else:
+                iv5 = 0
+        k0, k1 = kk[region[iv5]]
+        kt0, _, kt2 = kk["T"]
+        if estandar:
+            alpha_de = (lambda kk0, kk1: (lambda r: _fx80_alpha_std(kk0, kk1, r, rnd, "k0_rr")))(k0, k1)
+        else:
+            alpha_de = lambda r: _fx80_alpha_trans(kt0, kt2, r, rnd)
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, rho, tol, cuenta, rnd, alpha_de,
+            lambda a: _fx80_ctl(d_t, a, rnd, 9, True, True))
+        if fijo:
+            break
+        d = rho
+        coherente = ((d <= 778.5 and iv5 == 2) or (778.5 < d <= 839.0 and iv5 == 1)
+                     or (839.0 < d and iv5 == 0))
+        if coherente:
+            if (not estandar) or d <= 770.0 or 788.0 <= d:
+                break
+            estandar = False
+            rho = 778.84
+            if rnd:
+                tol = 0.07
+        else:
+            rho = obs
+            p1 = d
+        if cuenta > 99:
+            break
+    if rho == 0.0 or not _fx80_finito(rho):
+        return {"rc": _FX80_ERRCALC, "cuenta": cuenta}
+    if estandar:
+        kout = (k0, k1, 0.0)
+        prod = {0: 6, 1: 5, 2: 3}[iv5]
+    else:
+        kout = kk["T"]
+        prod = 4
+    if rnd:
+        rho = _fx80_r(rho, 3)
+    if _fx80_rango_t53_b(rho, p2) == _FX80_RANGO:
+        oor = 1
+    return {"rc": _FX80_OK, "cuenta": cuenta, "base": rho, "ctl": ctl, "alpha": alpha,
+            "k0": kout[0], "k1": kout[1], "k2": kout[2], "producto": prod, "oor": oor}
+
+
+# ---------------------------------------------------------------------------
+# Table5 1980 (US, °API): FUN_1800e4f94 -> e404c / e4450 / e4b80
+# ---------------------------------------------------------------------------
+def _fx80_t5(api, temp_f, producto, rnd, hidro):
+    rnd = bool(rnd)
+    if producto not in (1, 2, 3, 4, 5, 6, 7):
+        return {"rc": _FX80_RANGO}
+    kk = _FX80_K_US
+    p1, p2 = api, temp_f
+    if rnd:
+        p1 = _fx80_r(p1, 1)
+        p2 = _fx80_r(p2, 1)
+    rango = (_fx80_rango_t5_crudo if producto == 1 else
+             _fx80_rango_t5_lube if producto == 7 else _fx80_rango_t5_b)
+    oor = 1 if rango(p1, p2) == _FX80_RANGO else 0
+    d_t = p2 - 60.0
+    tol = 0.05 if rnd else 1e-05
+    if producto in (1, 7):
+        if producto == 7:
+            den = p1 + 131.5
+            if den == 0.0:
+                return {"rc": _FX80_ERRCALC}
+            rho0 = 141360.198 / den
+            if rnd:
+                rho0 = _fx80_r(rho0, 2)
+            hyd = _fx80_hidrometro(d_t, 1.278e-05, 6.2e-09, rnd) if hidro else 1.0
+        else:
+            hyd = _fx80_hidrometro(d_t, 1.278e-05, 6.2e-09, rnd) if hidro else 1.0
+            rho0 = _fx80_div(141360.198, p1 + 131.5)
+            if rnd:
+                rho0 = _fx80_r(rho0, 2)
+        obs = hyd * rho0
+        if rnd:
+            obs = _fx80_r(obs, 2)
+        k0, k1, k2 = kk["crudo"] if producto == 1 else kk["lube"]
+        forma = "k0_r2" if producto == 1 else "k1_k0r2b"
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, obs, tol, 0, rnd,
+            lambda r: _fx80_alpha_std(k0, k1, r, rnd, forma),
+            lambda a: _fx80_ctl(d_t, a, rnd, 8, False, False))
+        api60 = _fx80_div(141360.198, rho) - 131.5
+        if rnd:
+            api60 = _fx80_r(api60, 1)
+        if rango(api60, p2) == _FX80_RANGO:
+            oor = 1
+        return {"rc": _FX80_OK, "cuenta": cuenta, "base": api60, "ctl": ctl, "alpha": alpha,
+                "k0": k0, "k1": k1, "k2": k2, "producto": producto, "oor": oor}
+    # grupo B: FUN_1800e4450
+    hyd = _fx80_hidrometro(d_t, 1.278e-05, 6.2e-09, rnd) if hidro else 1.0
+    rho0 = _fx80_div(141360.198, p1 + 131.5)
+    if rnd:
+        rho0 = _fx80_r(rho0, 2)
+    obs = hyd * rho0
+    if rnd:
+        obs = _fx80_r(obs, 2)
+    iv1 = {2: 0, 3: 1, 4: 2, 5: 3, 6: 4}[producto]
+    rho, cuenta, estandar, sel = obs, 0, True, p1
+    region = {0: "F", 1: "J", 2: "G"}
+    kt0, _, kt2 = kk["T"]
+    while True:
+        if 37.0 < sel:
+            iv5 = 2 if 50.0 < sel else 1
+        else:
+            iv5 = 0
+        fijo = False
+        if iv1 == 1:
+            iv5, fijo = 2, True
+        elif iv1 == 2:
+            estandar, fijo = False, True
+        elif iv1 == 3:
+            iv5, fijo = 1, True
+        elif iv1 == 4:
+            iv5, fijo = 0, True
+        k0, k1 = kk[region[iv5]]
+        if estandar:
+            alpha_de = (lambda kk0, kk1: (lambda r: _fx80_alpha_std(kk0, kk1, r, rnd, "k0_rr")))(k0, k1)
+        else:
+            alpha_de = lambda r: _fx80_alpha_trans(kt0, kt2, r, rnd)
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, rho, tol, cuenta, rnd, alpha_de,
+            lambda a: _fx80_ctl(d_t, a, rnd, 8, False, False))
+        api60 = _fx80_div(141360.198, rho) - 131.5
+        if rnd:
+            api60 = _fx80_r(api60, 1)
+        if fijo:
+            break
+        a = api60
+        coherente = ((a <= 37.0 and iv5 == 0) or (37.0 < a <= 50.0 and iv5 == 1)
+                     or (50.0 < a and iv5 == 2))
+        if coherente:
+            if (not estandar) or a <= 48.0 or 52.0 < a:
+                break
+            estandar = False
+            rho = 778.84
+            if rnd:
+                tol = 0.07
+        else:
+            rho = obs
+            sel = a
+        if cuenta > 99:
+            break
+    if estandar:
+        kout = (k0, k1, 0.0)
+        prod = {0: 6, 1: 5, 2: 3}[iv5]
+    else:
+        kout = kk["T"]
+        prod = 4
+    if _fx80_rango_t5_b(api60, p2) == _FX80_RANGO:
+        oor = 1
+    return {"rc": _FX80_OK, "cuenta": cuenta, "base": api60, "ctl": ctl, "alpha": alpha,
+            "k0": kout[0], "k1": kout[1], "k2": kout[2], "producto": prod, "oor": oor}
+
+
+# ---------------------------------------------------------------------------
+# Table23 1980 (US, RD): FUN_1800eb1f8 -> e9a68 / e9f48 / ea5cc
+# ---------------------------------------------------------------------------
+def _fx80_t23(rd, temp_f, producto, rnd, hidro):
+    rnd = bool(rnd)
+    if producto not in (1, 2, 3, 4, 5, 6, 7):
+        return {"rc": _FX80_RANGO}
+    kk = _FX80_K_US
+    p1, p2 = rd, temp_f
+    if rnd:
+        p1 = _fx80_r(p1 * 2.0, 3) * 0.5
+        p2 = _fx80_r(p2, 1)
+    rango = (_fx80_rango_t23_crudo if producto == 1 else
+             _fx80_rango_t23_lube if producto == 7 else _fx80_rango_t23_b)
+    oor = 1 if rango(p1, p2) == _FX80_RANGO else 0
+    d_t = p2 - 60.0
+    hyd = _fx80_hidrometro(d_t, 1.278e-05, 6.2e-09, rnd) if hidro else 1.0
+    obs = p1 * 999.012
+    if rnd:
+        obs = _fx80_r(obs, 2)
+    obs = obs * hyd
+    if rnd:
+        obs = _fx80_r(obs, 2)
+    tol = 0.05 if rnd else 1e-05
+    if producto in (1, 7):
+        k0, k1, k2 = kk["crudo"] if producto == 1 else kk["lube"]
+        forma = "k1_k0r2" if producto == 1 else "k1_k0rr"
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, obs, tol, 0, rnd,
+            lambda r: _fx80_alpha_std(k0, k1, r, rnd, forma),
+            lambda a: _fx80_ctl(d_t, a, rnd, 8, False, False))
+        rd60 = rho / 999.012
+        if rnd:
+            rd60 = _fx80_r(rd60, 4)
+        if rango(rd60, p2) == _FX80_RANGO:
+            oor = 1
+        return {"rc": _FX80_OK, "cuenta": cuenta, "base": rd60, "ctl": ctl, "alpha": alpha,
+                "k0": k0, "k1": k1, "k2": k2, "producto": producto, "oor": oor}
+    iv = {2: 0, 3: 1, 4: 2, 5: 3, 6: 4}[producto]
+    rho, cuenta, estandar, fijo, sel = obs, 0, True, False, p1
+    region = {0: "F", 1: "J", 2: "G"}
+    kt0, _, kt2 = kk["T"]
+    iv6, k0, k1 = 0, 0.0, 0.0
+    while True:
+        if iv == 0:
+            if sel <= 0.84:
+                iv6 = 2 if sel <= 0.7785 else 1
+            else:
+                iv6 = 0
+        elif iv == 1:
+            fijo, iv6 = True, 2
+        elif iv == 2:
+            fijo, estandar = True, False
+        elif iv == 3:
+            fijo, iv6 = True, 1
+        else:
+            fijo, iv6 = True, 0
+        k0, k1 = kk[region[iv6]]
+        if estandar:
+            alpha_de = (lambda kk0, kk1: (lambda r: _fx80_alpha_std(kk0, kk1, r, rnd, "k1_k0r2")))(k0, k1)
+        else:
+            alpha_de = lambda r: _fx80_alpha_trans(kt0, kt2, r, rnd)
+        rho, alpha, ctl, cuenta = _fx80_bucle(
+            obs, rho, tol, cuenta, rnd, alpha_de,
+            lambda a: _fx80_ctl(d_t, a, rnd, 8, False, False))
+        if 1074.982 < rho or rho < 652.934:
+            oor = 1
+        rd60 = rho / 999.012
+        if rnd:
+            rd60 = _fx80_r(rd60, 4)
+        if fijo:
+            break
+        r = rd60
+        coherente = ((0.84 < r <= 1.076 and iv6 == 0) or (0.7785 < r <= 0.84 and iv6 == 1)
+                     or (0.6535 <= r <= 0.7785 and iv6 == 2))
+        if coherente:
+            if (not estandar) or r <= 0.771 or 0.7785 < r:
+                break
+            estandar = False
+            rho = 778.84
+            if rnd:
+                tol = 0.07
+        else:
+            rho = obs
+            sel = r
+        if cuenta > 99:
+            break
+    if estandar:
+        kout = (k0, k1, 0.0)
+        prod = {0: 6, 1: 5, 2: 3}[iv6]
+    else:
+        kout = kk["T"]
+        prod = 4
+    if _fx80_rango_t23_b(rd60, p2) == _FX80_RANGO:
+        oor = 1
+    return {"rc": _FX80_OK, "cuenta": cuenta, "base": rd60, "ctl": ctl, "alpha": alpha,
+            "k0": kout[0], "k1": kout[1], "k2": kout[2], "producto": prod, "oor": oor}
+
+
+def _fx80_estado_iterativa(res: dict, nombre: str) -> dict:
+    """Codigos del despachador (FUN_1800e4f94/eb1f8/edc80): cuenta > 99 -> 0x2d.
+    0x2b -> ValueError (status 1), 0x2c -> ArithmeticError (status 2),
+    0x2d -> ArithmeticError (status 3)."""
+    if res.get("cuenta", 0) > 99:
+        raise ArithmeticError(f"No convergence ({nombre}): status 3.")
+    if res["rc"] == _FX80_RANGO:
+        raise ValueError(f"Input argument out of range ({nombre}).")
+    if res["rc"] == _FX80_ERRCALC:
+        raise ArithmeticError(f"Calculation error ({nombre}).")
+    return res
+
+
+# ---------------------------------------------------------------------------
+# Nucleos combinados con presion (FUN_1800e62d4 / e79e4 / e8494).
+# conv: 1 = Observed->Standard, 2 = Standard->Observed (codigo interno).
+# a2540: API-2540 Rounding 0..3; rnd1121: API-11.2.1 Rounding 0/1.
+# ---------------------------------------------------------------------------
+_FX80_K_COMB_M = {1: (613.9723, 0.0, 0.0), 3: (346.4228, 0.4388, 0.0),
+                  4: (2680.3206, 0.0, -0.00336312), 5: (594.5418, 0.0, 0.0),
+                  6: (186.9696, 0.4862, 0.0), 7: (0.0, 0.6278, 0.0)}
+_FX80_K_COMB_US = {1: (341.0957, 0.0, 0.0), 3: (192.4571, 0.2438, 0.0),
+                   4: (1489.067, 0.0, -0.0018684), 5: (330.301, 0.0, 0.0),
+                   6: (103.872, 0.2701, 0.0), 7: (0.0, 0.34878, 0.0)}
+
+
+def _fx80_alpha_comb(k, rho, a2540, conv, prod):
+    """alpha de los nucleos combinados (rho = densidad candidata, kg/m3)."""
+    k0, k1, k2 = k
+    if not a2540:
+        return _fx80_div(_fx80_div(k0, rho), rho) + _fx80_div(k1, rho) + k2
+    r2 = _fx80_r(rho, 2)
+    a = _fx80_div(k0, r2)
+    if prod == 4 and conv == 1:
+        s = _fx80_r(_fx80_div(_fx80_t(a, 6), r2), 8)
+    elif prod == 4:
+        s = _fx80_r(_fx80_div(_fx80_t(a, 8), r2), 10)
+    else:
+        a = _fx80_t(_fx80_div(_fx80_t(a, 8), r2), 10)
+        s = _fx80_t(_fx80_div(k1, r2), 10) + a
+    return _fx80_r(s + k2, 7)
+
+
+def _fx80_ctl_comb(d_t, alpha, a2540, conv):
+    if not a2540:
+        x = d_t * alpha
+        return _fx80_exp(-(x * 0.8 * x) - x)
+    x = _fx80_t(d_t * alpha, 8)
+    y = _fx80_t(x * 0.8, 8)
+    z = _fx80_t(x * y, 8)
+    ctl = _fx80_exp(_fx80_r(-z - x, 8))
+    if conv == 1:
+        return _fx80_r(ctl, 6)
+    if a2540 == 1:
+        return _fx80_r(ctl, 4 if 1.0 <= ctl else 5)
+    if a2540 == 2:
+        return _fx80_r(ctl, 4)
+    return _fx80_r(ctl, 5)
+
+
+def _fx80_f_us(api_f, t_f, rnd1121):
+    """F (1/psi) de 11.2.1 dentro de e79e4/e8494. None si rd^2 == 0 (0x2c)."""
+    rr = _fx80_div(141.360198, api_f + 131.5)
+    if not rnd1121:
+        r2 = rr * rr
+    else:
+        rr = _fx80_r(rr, 5)
+        r2 = _fx80_r(rr * rr, 5)
+    if r2 == 0.0:
+        return None
+    c_ = _fx80_div(0.79392, r2)
+    d_ = _fx80_div(t_f * 0.002326, r2)
+    if not rnd1121:
+        f = _fx80_exp((t_f * 0.00013427 - 1.9947) + c_ + d_)
+    else:
+        f = _fx80_r(_fx80_exp(_fx80_r(d_, 5) + _fx80_r(c_, 5) + _fx80_r(t_f * 0.00013427, 5)
+                              + _fx80_r(-1.9947, 5)), 3)
+    return f / 100000.0
+
+
+def _fx80_f_m(dens_f, t_f, rnd1121):
+    """F (1/bar) de 11.2.1M dentro de e62d4. None si rho_r^2 == 0 (0x2c)."""
+    d = dens_f
+    if rnd1121:
+        d = _fx80_r(d * 0.5, 0) * 2.0
+    r2 = d * 0.001 * d * 0.001
+    if rnd1121:
+        r2 = _fx80_r(r2, 5)
+    if r2 == 0.0:
+        return None
+    d_ = _fx80_div(t_f * 0.0042092, r2)
+    c_ = _fx80_div(0.87096, r2)
+    if not rnd1121:
+        f = _fx80_exp((t_f * 0.00021592 - 1.6208) + c_ + d_)
+    else:
+        f = _fx80_r(_fx80_exp(_fx80_r(d_, 5) + _fx80_r(c_, 5) + _fx80_r(t_f * 0.00021592, 5)
+                              + _fx80_r(-1.6208, 5)), 3)
+    return f / 10000.0
+
+
+def _fx80_sel_auto(tipo, q, con_transicion):
+    """Seleccion de producto de 'B - Auto select' en los nucleos combinados."""
+    if tipo == "M":
+        if con_transicion:
+            if 770.0 < q:
+                return (6 if 839.0 <= q else 5) if 788.0 <= q else 4
+            return 3
+        return (6 if 839.0 <= q else 5) if 779.0 <= q else 3
+    if tipo == "API":
+        if con_transicion:
+            if 37.0 < q:
+                return (4 if q <= 52.0 else 3) if 48.0 <= q else 5
+            return 6
+        if 37.0 < q:
+            return 5 if q <= 50.0 else 3
+        return 6
+    if con_transicion:
+        if 0.771 <= q:
+            return (6 if 0.84 <= q else 5) if 0.789 <= q else 4
+        return 3
+    return (6 if 0.84 <= q else 5) if 0.779 < q else 3
+
+
+def _fx80_combinada(tipo, valor, temp, pres, producto, a2540, hidro, rnd1121, evp, conv):
+    """Replica de FUN_1800e62d4 (tipo 'M': kg/m3, degC, bar(g)), e79e4 ('API':
+    degAPI, degF, psig) y e8494 ('RD': RD, degF, psig). Devuelve dict con rc
+    (0x2a/0x2b/0x2c), res, ctl, cpl, ctpl, k0..k2, alpha, f, prod_sel,
+    oor_tabla, oor_1121."""
+    out = {"rc": _FX80_RANGO, "prod_sel": -1, "oor_tabla": 0, "oor_1121": 0}
+    if tipo == "M":
+        malo = (valor <= 500.0 or 1300.0 <= valor or pres <= -1.0
+                or temp <= -30.0 or 200.0 <= temp)
+    elif tipo == "API":
+        malo = (valor <= -20.0 or 120.0 <= valor or pres <= -10.0
+                or temp <= -100.0 or 400.0 <= temp)
+    else:
+        malo = (valor <= 0.5 or 1.2 <= valor or pres <= -10.0
+                or temp <= -100.0 or 400.0 <= temp)
+    if malo:
+        return out
+    t_ctl = temp                    # local_res10 (T de CTL y de los rangos)
+    t_f = temp                      # param_2 (T de F)
+    if rnd1121:
+        t_f = (_fx80_r(t_f * 4.0, 0) * 0.25) if tipo == "M" else (_fx80_r(t_f * 2.0, 0) * 0.5)
+    v = valor
+    if a2540:
+        if tipo == "M":
+            v = _fx80_r(v * 2.0, 0) * 0.5
+            t_ctl = _fx80_r(t_ctl * 2.0, 1) * 0.5
+        elif tipo == "API":
+            v = _fx80_r(v, 1)
+            t_ctl = _fx80_r(t_ctl, 1)
+        else:
+            v = _fx80_r(v * 2.0, 3) * 0.5
+            t_ctl = _fx80_r(t_ctl, 1)
+    d_t = t_ctl - (15.0 if tipo == "M" else 60.0)
+    hyd = 1.0
+    if hidro == 1 and conv == 1:
+        if tipo == "M":
+            hyd = _fx80_hidrometro(d_t, 2.3e-05, 2e-08, a2540)
+        else:
+            hyd = _fx80_hidrometro(d_t, 1.278e-05, 6.2e-09, a2540)
+    if tipo == "M":
+        if a2540:
+            v = _fx80_r(v, 2)
+        rho_std = v
+        base = hyd * v
+    elif tipo == "API":
+        rho_std = _fx80_div(141360.198, v + 131.5)
+        if a2540:
+            rho_std = _fx80_r(rho_std, 2)
+        base = rho_std * hyd
+    else:
+        rho_std = v * 999.012
+        if a2540:
+            rho_std = _fx80_r(rho_std, 2)
+        base = rho_std * hyd
+    if a2540:
+        base = _fx80_r(base, 2)
+    tabla_k = _FX80_K_COMB_M if tipo == "M" else _FX80_K_COMB_US
+    ctl = cpl = 1.0
+    alpha = f = 0.0
+    k = (0.0, 0.0, 0.0)
+    q = base if tipo == "M" else v          # param_19
+    prod = -1
+    pasada = 0
+    tol = 1e-06
+    while True:
+        previo = prod
+        if producto == 2 and pasada == 0 and conv == 1:
+            prod = _fx80_sel_auto(tipo, q, False)
+        else:
+            prod = _fx80_sel_auto(tipo, q, True) if producto == 2 else producto
+            if pasada != 0 and (pasada != 1 or prod == previo):
+                break
+        if prod not in tabla_k:
+            return dict(out, prod_sel=prod)
+        k = tabla_k[prod]
+        rho = 778.84 if (conv == 1 and prod == 4) else base
+        if a2540:
+            tol = 0.07 if prod == 4 else 0.05
+        it = 0
+        while True:
+            previo_rho = rho
+            alpha = _fx80_alpha_comb(k, rho, a2540, conv, prod)
+            ctl = _fx80_ctl_comb(d_t, alpha, a2540, conv)
+            # candidato con el CPL de la vuelta anterior (conv 2: dato estandar)
+            if conv == 1:
+                nuevo = _fx80_div(_fx80_div(base, ctl), cpl)
+                if a2540:
+                    nuevo = _fx80_t(nuevo, 3)
+            elif tipo == "M":
+                nuevo = v
+            elif tipo == "API":
+                nuevo = rho_std
+            else:
+                nuevo = _fx80_r(rho, 2) if a2540 else rho
+            if tipo == "M":
+                q = nuevo
+                f = _fx80_f_m(nuevo, t_f, rnd1121)
+            elif tipo == "API":
+                if conv == 1:
+                    q = 0.0 if nuevo == 0.0 else _fx80_div(141360.198, nuevo) - 131.5
+                if rnd1121:
+                    q = _fx80_r(q * 2.0, 0) * 0.5
+                f = _fx80_f_us(q, t_f, rnd1121)
+            else:
+                api_f = _fx80_div(141.5, nuevo / 999.016) - 131.5
+                if rnd1121:
+                    api_f = _fx80_r(api_f * 2.0, 0) * 0.5
+                f = _fx80_f_us(api_f, t_f, rnd1121)
+            if f is None:
+                return dict(out, rc=_FX80_ERRCALC, prod_sel=prod)
+            p_net = pres - evp if 0.0 < evp else pres
+            den = 1.0 - p_net * f
+            if den == 0.0:
+                return dict(out, rc=_FX80_ERRCALC, prod_sel=prod)
+            cpl = 1.0 / den
+            if conv == 1:
+                nuevo = _fx80_div(_fx80_div(base, ctl), cpl)
+                if a2540:
+                    nuevo = _fx80_t(nuevo, 3)
+                if tipo == "M":
+                    q = nuevo
+                elif tipo == "API":
+                    if nuevo == 0.0:
+                        q = 0.0
+                    else:
+                        q = _fx80_div(141360.198, nuevo) - 131.5
+                        if a2540:
+                            q = _fx80_r(q, 1)
+                    if a2540:
+                        q = _fx80_r(q, 1)
+            elif tipo == "API" and a2540:
+                q = _fx80_r(q, 1)
+            if tipo == "RD":
+                q = nuevo / 999.012
+                if a2540:
+                    q = _fx80_r(q, 4)
+            it += 1
+            if it > 100 or conv == 2:
+                break
+            diff = abs(previo_rho - nuevo)
+            rho = nuevo
+            if not (tol <= diff):
+                pasada += 1
+                break
+        if it > 99 or conv == 2:
+            break
+    # --- final (LAB_1800e6ad8 / e82d7 / e8cc4)
+    ctpl = ctl * cpl
+    if conv == 1:
+        res = q
+        if a2540:
+            res = _fx80_r(q, 4 if tipo == "RD" else 1)
+    else:
+        if tipo == "API":
+            res = _fx80_div((1.0 - ctpl) * 131.5 + v, ctpl)
+        else:
+            res = ctl * cpl * v
+        q = v
+    if tipo == "M":
+        rango = {1: _fx80_rango_t53_crudo, 7: _fx80_rango_t53_lube}.get(producto, _fx80_rango_t53_b)
+        t_lim, p_lim, q_lim = (-30.0, 90.0), 103.0, (638.0, 1074.0)
+    elif tipo == "API":
+        rango = {1: _fx80_rango_t5_crudo, 7: _fx80_rango_t5_lube}.get(producto, _fx80_rango_t5_b)
+        t_lim, p_lim, q_lim = (-20.0, 200.0), 1500.0, (0.0, 90.0)
+    else:
+        rango = {1: _fx80_rango_t23_crudo, 7: _fx80_rango_t23_lube}.get(producto, _fx80_rango_t23_b)
+        t_lim, p_lim, q_lim = (-20.0, 200.0), 1500.0, (0.6388, 1.076)
+    if producto not in (1, 2, 3, 4, 5, 6, 7):
+        return dict(out, prod_sel=prod)
+    oor_tabla = 1 if rango(q, t_ctl) == _FX80_RANGO else 0
+    oor_1121 = 0
+    if t_ctl < t_lim[0] or t_lim[1] < t_ctl:
+        oor_1121 = 1
+    if pres < 0.0 or p_lim < pres:
+        oor_1121 = 1
+    if evp < 0.0 or p_lim < evp:
+        oor_1121 = 1
+    if q < q_lim[0] or q_lim[1] < q:
+        oor_1121 = 1
+    return {"rc": _FX80_OK, "res": res, "ctl": ctl, "cpl": cpl, "ctpl": ctpl,
+            "k0": k[0], "k1": k[1], "k2": k[2], "alpha": alpha, "f": f,
+            "prod_sel": prod, "oor_tabla": oor_tabla, "oor_1121": oor_1121}
+
+
+# ---------------------------------------------------------------------------
+# Tablas directas 1980 (Table6/24/54): FUN_1800e5e1c -> e5510/e584c/e5bb0,
+# FUN_1800ec49c -> eb74c/eb97c/ebdf0, FUN_1800eed08 -> ee1f8/ee438/ee7d8.
+# ---------------------------------------------------------------------------
+def _fx80_directa(tabla, valor, temp, producto, rnd):
+    """tabla: 'T6' (degAPI@60F, degF), 'T24' (RD@60F, degF), 'T54' (kg/m3@15C, degC).
+    rnd: API Rounding 0..3. Devuelve dict con rc, ctl, alpha, k0..k2, producto, oor."""
+    if producto not in (1, 2, 3, 4, 5, 6, 7):
+        return {"rc": _FX80_RANGO}
+    if tabla == "T54" and producto in (2, 3, 4, 5, 6) and (valor == 0.0 or not _fx80_finito(valor)):
+        return {"rc": _FX80_RANGO}
+    v, t = valor, temp
+    if rnd:
+        if tabla == "T6":
+            v, t = _fx80_r(v, 1), _fx80_r(t, 1)
+        elif tabla == "T24":
+            v, t = _fx80_r(v * 2.0, 3) * 0.5, _fx80_r(t, 1)
+        else:
+            v, t = _fx80_r(v * 2.0, 0) * 0.5, _fx80_r(t * 2.0, 1) * 0.5
+    if tabla == "T6":
+        rango = {1: _fx80_rango_t5_crudo, 7: _fx80_rango_t5_lube}.get(producto, _fx80_rango_t5_b)
+    elif tabla == "T24":
+        rango = {1: _fx80_rango_t23_crudo, 7: _fx80_rango_t23_lube}.get(producto, _fx80_rango_t23_b)
+    else:
+        rango = {1: _fx80_rango_t53_crudo, 7: _fx80_rango_t53_lube}.get(producto, _fx80_rango_t53_b)
+    oor = 1 if rango(v, t) == _FX80_RANGO else 0
+    if tabla == "T6":
+        rho = _fx80_div(141360.198, v + 131.5)
+    elif tabla == "T24":
+        rho = v * 999.012
+    else:
+        rho = v
+    if rnd and tabla != "T54":
+        rho = _fx80_r(rho, 2)
+    metrico = tabla == "T54"
+    kk = _FX80_K_COMB_M if metrico else _FX80_K_COMB_US
+    if producto in (1, 7):
+        prod = producto
+    elif producto != 2:
+        prod = producto
+    else:
+        # auto select (con Transition) sobre el valor ya redondeado
+        if tabla == "T6":
+            prod = 6 if v <= 37.0 else (5 if v <= 48.0 else (4 if v <= 52.0 else 3))
+        elif tabla == "T24":
+            prod = 3 if v <= 0.771 else (4 if v <= 0.789 else (5 if v <= 0.84 else 6))
+        else:
+            prod = 3 if v <= 770.0 else (4 if v <= 788.0 else (5 if v <= 839.0 else 6))
+    k0, k1, k2 = kk[prod]
+    d_t = t - (15.0 if metrico else 60.0)
+    if not rnd:
+        alpha = _fx80_div(_fx80_div(k0, rho), rho) + _fx80_div(k1, rho) + k2
+        x = d_t * alpha
+        ctl = _fx80_exp(-(x * 0.8 * x) - x)
+    else:
+        a = _fx80_t(_fx80_div(k0, rho), 8)
+        if tabla == "T24" and producto not in (1, 7):
+            alpha = _fx80_r(_fx80_div(k1, rho) + _fx80_r(_fx80_div(a, rho), 10) + k2, 7)
+        else:
+            alpha = _fx80_r(_fx80_t(_fx80_div(k1, rho), 10) + _fx80_t(_fx80_div(a, rho), 10) + k2, 7)
+        x = _fx80_t(d_t * alpha, 8)
+        y = _fx80_t(x * 0.8, 8)
+        if tabla == "T24" and producto == 1:
+            z = _fx80_r(x * y, 8)
+        else:
+            z = _fx80_t(x * y, 8)
+        e = -z - x
+        if metrico:
+            e = _fx80_t(e, 8)
+        ctl = _fx80_exp(e)
+        if tabla == "T6" or (tabla == "T24" and producto == 1):
+            ctl = _fx80_t(ctl, 8)
+        if metrico:
+            dec = 4 if (rnd == 2 or (rnd != 3 and 1.0 <= ctl)) else 5
+            ctl = _fx80_r(ctl, dec)
+        elif rnd == 1:
+            ctl = _fx80_r(ctl, 5 if ctl < 1.0 else 4)
+        elif rnd == 2:
+            ctl = _fx80_r(ctl, 4)
+        elif rnd == 3:
+            ctl = _fx80_r(ctl, 5)
+    if producto == 1:
+        kout = (k0, 0.0, 0.0)
+    elif producto == 7:
+        kout = (0.0, k1, 0.0)
+    else:
+        kout = (k0, k1, k2)
+    return {"rc": _FX80_OK, "ctl": ctl, "alpha": alpha, "k0": kout[0], "k1": kout[1],
+            "k2": kout[2], "producto": prod, "oor": oor}
+
+
+# ===========================================================================
 # API_Table5_1980 -- [CERTAIN] motor decompilado directamente (FUN_1800e4f94
 # / FUN_1800e4450). API observada (T) -> API a 60F.
 # Manual pagina 59: rango API -20..120, T -100..400 F, default T=60F.
@@ -2108,52 +3165,19 @@ def api_table5_1980(observed_api: float, observed_temp_f: float,
     52.0, byte-exactos, confirmados en el propio codigo compilado de esta
     familia). Se agrega la clave `product_efectivo` (3/4/5/6) al resultado
     con el producto realmente seleccionado, igual que el output "Product"
-    (PRDCUR) real de la pantalla."""
-    tol = 0.05 if rounding else 1e-6
+    (PRDCUR) real de la pantalla.
 
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if rounding:
-            # [CERTAIN, 2026-10-06, 4 capturas libro 04] Cascada API-2540 (como Table-23/53) hasta convergencia
-            # estricta: API de entrada a 0.1, T a 0.1 degF, densidades a 2 decimales, candidatos truncados a 3;
-            # alpha con la densidad final. Corrige CTL del caso 6 (0.976143 -> 0.976144) y alpha del caso 4.
-            t_r = _round_comercial_n(observed_temp_f, 1)
-            rho_2dec = _round_comercial_n(_rd60_to_density_kgm3(141.5 / (131.5 + _round_comercial_n(observed_api, 1))), 2)
-            hyd = _hydrometer_factor(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_2dec * hyd, 2)
-            rho_guess, dens60, ctl = rho_fixed, rho_fixed, 1.0
-            for vuelta in range(100):
-                rho_ref = SEED_TRANSITION_KGM3 if (vuelta == 0 and producto_fijo == 4) else _round_comercial_n(rho_guess, 2)
-                ctl = _round_comercial_n(_ctl_cascade_api2540(_alpha_cascade_api2540(k, rho_ref, producto_fijo),
-                                                              t_r - T_REF_US_1980_F), 6)
-                dens60 = _trunc_hacia_cero_n(rho_fixed / ctl, 3)
-                cambio, rho_guess = abs(rho_guess - dens60), dens60
-                if cambio < 1e-6:
-                    break
-            alpha = _alpha(k, dens60)  # alpha mostrado: sin truncados, con la densidad final (caso 4: 0.001017)
-            api60 = 141.5 / _density_kgm3_to_rd60(dens60) - 131.5
-            return {"api_60f": api60, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": api60}
-        rd_obs = 141.5 / (131.5 + observed_api)
-        rho_obs_kgm3 = _rd60_to_density_kgm3(rd_obs)
-        if hydrometer_correction:
-            rho_obs_kgm3 *= _hydrometer_factor(observed_temp_f)
-        rho_base_kgm3, ctl, alpha = _ctl_1980_iter(k, rho_obs_kgm3, observed_temp_f, T_REF_US_1980_F, tol=tol)
-        rd_base = _density_kgm3_to_rd60(rho_base_kgm3)
-        api60 = 141.5 / rd_base - 131.5
-        return {"api_60f": api60, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": api60}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(observed_api, "api", True, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    api60 = resultado["api_60f"]
-    if rounding:
-        api60 = round(api60, 1)
-    return {"api_60f": api60, "ctl": resultado["ctl"], "alpha": resultado["alpha"],
-            "k0": resultado["k0"], "k1": resultado["k1"], "k2": resultado["k2"],
-            "product_efectivo": producto_efectivo}
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_t5`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
+    r = _fx80_estado_iterativa(
+        _fx80_t5(observed_api, observed_temp_f, product, 1 if rounding else 0,
+                 1 if hydrometer_correction else 0), "API Table5 1980")
+    return {"api_60f": r["base"], "ctl": r["ctl"], "alpha": r["alpha"],
+            "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2186,38 +3210,20 @@ def api_table6_1980(api_60f: float, observed_temp_f: float,
     propio de Table6 para las opciones 1/3 (permanece con evidencia manual +
     decompilacion + funcion ya validada en otra parte, no un caso real
     dedicado a Table6). Default 0 = comportamiento identico a versiones
-    previas de este archivo (sin regresion)."""
+    previas de este archivo (sin regresion).
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_directa`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if rounding not in (0, 1, 2, 3):
         raise ValueError("rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if rounding != 0:
-            # [CERTAIN, 2026-10-05, 7 capturas reales libro 04] "API Rounding" activo: misma cascada API-2540 que
-            # la rama directa de las funciones combinadas 1980 (entrada redondeada, densidad a 2 decimales, T a 0.1,
-            # alpha y CTL con truncados intermedios). Ver api_table24_1980.
-            rho60_kgm3 = _rd60_to_density_kgm3(141.5 / (131.5 + _round_comercial_n(api_60f, 1)))
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho60_kgm3, 2), producto_fijo)
-            ctl = _ctl_cascade_api2540(alpha, _round_comercial_n(observed_temp_f, 1) - T_REF_US_1980_F)
-        else:
-            rd60 = 141.5 / (131.5 + api_60f)
-            rho60_kgm3 = _rd60_to_density_kgm3(rd60)
-            alpha = _alpha(k, rho60_kgm3)
-            ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-        return {"ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": api_60f}
-
-    if product == 2:
-        # RONDA 49: entrada YA a 60F (condiciones base) -- direccion directa,
-        # 1 sola evaluacion con Transition incluida desde el principio (ver
-        # `_resolver_producto_auto_1980`).
-        resultado, producto_efectivo = _auto_select_1980(api_60f, "api", False, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    ctl = _ctl_rounding_directo(resultado["ctl"], rounding)
-    return {"ctl": ctl, "alpha": resultado["alpha"], "k0": resultado["k0"],
-            "k1": resultado["k1"], "k2": resultado["k2"], "product_efectivo": producto_efectivo}
+    r = _fx80_estado_iterativa(_fx80_directa("T6", api_60f, observed_temp_f, product, rounding),
+                               "API Table6 1980")
+    return {"ctl": r["ctl"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2280,43 +3286,19 @@ def api_table23_1980(observed_rd: float, observed_temp_f: float,
 
     `product=2` (B - Auto select) [LIKELY, RONDA 49]: mismo mecanismo que
     `api_table5_1980`, con breakpoints en RD adimensional (0.771/0.779/
-    0.789/0.84)."""
-    tol = 0.05 if rounding else 1e-6
+    0.789/0.84).
 
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if rounding:
-            # [CERTAIN, 2026-10-05, 4 capturas reales libro 04, hallazgo D-56] Con "API Rounding" FlowXpert usa la
-            # MISMA cascada API-2540 que api_reldensity60f_1980 (RONDA 30), con CPL = 1: RD de entrada a la
-            # graduacion de hidrometro (0.0005), T a 0.1 °F, densidades a 2 decimales, alpha/CTL con truncados
-            # intermedios y RD @60°F final a 4 decimales. Reproduce RD, CTL y alpha exactos (casos 3, 4, 5, 6).
-            t_r = _round_comercial_n(observed_temp_f, 1)
-            rd_r = _round_comercial_n(observed_rd * 2.0, 3) / 2.0
-            rho_2dec = _round_comercial_n(rd_r * RHO_WATER_60F_KGM3, 2)
-            hyd = _hydrometer_factor(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_2dec * hyd, 2)
-            dens_c2, ctl, _cpl, _ = _iterar_api2540_cascade(
-                k, rho_fixed, t_r, t_r - T_REF_US_1980_F, producto_fijo, lambda _d: 1.0, 100)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(dens_c2, 2), producto_fijo)
-            rd_base = _round_comercial_n(dens_c2 / RHO_WATER_60F_KGM3, 4)
-            return {"rd_60f": rd_base, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": rd_base}
-        rho_obs_kgm3 = _rd60_to_density_kgm3(observed_rd)
-        if hydrometer_correction:
-            rho_obs_kgm3 *= _hydrometer_factor(observed_temp_f)
-        rho_base_kgm3, ctl, alpha = _ctl_1980_iter(k, rho_obs_kgm3, observed_temp_f, T_REF_US_1980_F, tol=tol)
-        rd_base = _density_kgm3_to_rd60(rho_base_kgm3)
-        return {"rd_60f": rd_base, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": rd_base}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(observed_rd, "rd", True, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    rd_base = resultado["rd_60f"]  # con rounding ya viene a 4 decimales (antes se redondeaba a 1, D-56)
-    return {"rd_60f": rd_base, "ctl": resultado["ctl"], "alpha": resultado["alpha"],
-            "k0": resultado["k0"], "k1": resultado["k1"], "k2": resultado["k2"],
-            "product_efectivo": producto_efectivo}
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_t23`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
+    r = _fx80_estado_iterativa(
+        _fx80_t23(observed_rd, observed_temp_f, product, 1 if rounding else 0,
+                  1 if hydrometer_correction else 0), "API Table23 1980")
+    return {"rd_60f": r["base"], "ctl": r["ctl"], "alpha": r["alpha"],
+            "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2348,37 +3330,20 @@ def api_table24_1980(rd_60f: float, observed_temp_f: float,
     distinguir 1/3 -- la correccion se apoya en manual + reuso de funcion ya
     validada, no en un caso real nuevo dedicado a las opciones 1/3 de
     Table24. Default 0 = comportamiento identico a versiones previas de este
-    archivo (sin regresion)."""
+    archivo (sin regresion).
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_directa`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if rounding not in (0, 1, 2, 3):
         raise ValueError("rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if rounding != 0:
-            # [CERTAIN, 2026-10-05, 7 capturas reales libro 04] Con "API Rounding" activo FlowXpert aplica la
-            # cascada API-2540 de la rama directa de api_reldensity60f_1980: RD a la graduacion de hidrometro
-            # (0.0005), densidad a 2 decimales, T a 0.1 degF, alpha y CTL con truncados intermedios; despues el
-            # redondeo final del CTL segun la opcion. Reproduce CTL y alpha exactos (antes: casos 2 y 4 con CTL
-            # -0.00001 y alpha +0.2 %).
-            rd_r = _round_comercial_n(rd_60f * 2.0, 3) / 2.0
-            rho60_kgm3 = _rd60_to_density_kgm3(rd_r)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho60_kgm3, 2), producto_fijo)
-            ctl = _ctl_cascade_api2540(alpha, _round_comercial_n(observed_temp_f, 1) - T_REF_US_1980_F)
-        else:
-            rho60_kgm3 = _rd60_to_density_kgm3(rd_60f)
-            alpha = _alpha(k, rho60_kgm3)
-            ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-        return {"ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": rd_60f}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(rd_60f, "rd", False, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    ctl = _ctl_rounding_directo(resultado["ctl"], rounding)
-    return {"ctl": ctl, "alpha": resultado["alpha"], "k0": resultado["k0"],
-            "k1": resultado["k1"], "k2": resultado["k2"], "product_efectivo": producto_efectivo}
+    r = _fx80_estado_iterativa(_fx80_directa("T24", rd_60f, observed_temp_f, product, rounding),
+                               "API Table24 1980")
+    return {"ctl": r["ctl"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2425,46 +3390,19 @@ def api_table53_1980(observed_density_kgm3: float, observed_temp_c: float,
     versiones previas de este archivo (sin regresion).
 
     `product=2` (B - Auto select) [LIKELY, RONDA 49]: mismo mecanismo que
-    `api_table5_1980`, con breakpoints en kg/m3 (770.0/779.0/788.0/839.0)."""
-    tol = 0.05 if rounding else 1e-6
+    `api_table5_1980`, con breakpoints en kg/m3 (770.0/779.0/788.0/839.0).
 
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_METRIC[producto_fijo]
-        if rounding:
-            # [CERTAIN, 2026-10-06, 4 capturas libro 04] Cascada API-2540 (como Table-23) con iteracion hasta
-            # convergencia estricta: densidad de entrada a 0.5 kg/m3, T a 0.1 degC, densidades a 2 decimales,
-            # candidatos truncados a 3 decimales. FlowXpert muestra la densidad a 15 degC con 3 decimales (antes se
-            # redondeaba a 0.1). Con tolerancia 0.05 el caso 3 paraba en 739.108; FlowXpert sigue a 739.107.
-            t_r = _round_comercial_n(observed_temp_c, 1)
-            rho_2dec = _round_comercial_n(_round_densidad_hidrometro_metric(observed_density_kgm3), 2)
-            hyd = _hydrometer_factor_metric(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_2dec * hyd, 2)
-            rho_guess, dens15, ctl = rho_fixed, rho_fixed, 1.0
-            for vuelta in range(100):
-                rho_ref = SEED_TRANSITION_KGM3 if (vuelta == 0 and producto_fijo == 4) else _round_comercial_n(rho_guess, 2)
-                alpha = _alpha_cascade_api2540(k, rho_ref, producto_fijo)
-                ctl = _round_comercial_n(_ctl_cascade_api2540(alpha, t_r - T_REF_METRIC_1980_C), 6)
-                dens15 = _trunc_hacia_cero_n(rho_fixed / ctl, 3)
-                cambio, rho_guess = abs(rho_guess - dens15), dens15
-                if cambio < 1e-6:
-                    break
-            return {"density_15c": dens15, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": dens15}
-        dens_obs = observed_density_kgm3
-        if hydrometer_correction:
-            dens_obs = dens_obs * _hydrometer_factor_metric(observed_temp_c)
-        dens15, ctl, alpha = _ctl_1980_iter(k, dens_obs, observed_temp_c, T_REF_METRIC_1980_C, tol=tol)
-        return {"density_15c": dens15, "ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": dens15}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(observed_density_kgm3, "densidad_kgm3", True, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    dens15 = resultado["density_15c"]  # con rounding ya viene de la cascada (3 decimales)
-    return {"density_15c": dens15, "ctl": resultado["ctl"], "alpha": resultado["alpha"],
-            "k0": resultado["k0"], "k1": resultado["k1"], "k2": resultado["k2"],
-            "product_efectivo": producto_efectivo}
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_t53`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
+    r = _fx80_estado_iterativa(
+        _fx80_t53(observed_density_kgm3, observed_temp_c, product, 1 if rounding else 0,
+                  1 if hydrometer_correction else 0), "API Table53 1980")
+    return {"density_15c": r["base"], "ctl": r["ctl"], "alpha": r["alpha"],
+            "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2498,33 +3436,20 @@ def api_table54_1980(density_15c_kgm3: float, observed_temp_c: float,
     mantiene [LIKELY], apoyado en manual + decompilacion de wrapper
     identico + funcion de redondeo ya validada en otra parte, no fabricado.
     Default 0 = comportamiento identico a versiones previas de este archivo
-    (sin regresion)."""
+    (sin regresion).
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_directa`), validada bit a bit contra el
+    binario. Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if rounding not in (0, 1, 2, 3):
         raise ValueError("rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_METRIC[producto_fijo]
-        if rounding != 0:
-            # [CERTAIN, 2026-10-05, 7 capturas reales libro 04] "API Rounding" activo: misma cascada API-2540 que
-            # la rama directa de las funciones combinadas 1980 (entrada redondeada, densidad a 2 decimales, T a 0.1,
-            # alpha y CTL con truncados intermedios). Ver api_table24_1980.
-            rho = _round_densidad_hidrometro_metric(density_15c_kgm3)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho, 2), producto_fijo)
-            ctl = _ctl_cascade_api2540(alpha, _round_comercial_n(observed_temp_c, 1) - T_REF_METRIC_1980_C)
-        else:
-            alpha = _alpha(k, density_15c_kgm3)
-            ctl = _ctl_1980(alpha, observed_temp_c - T_REF_METRIC_1980_C)
-        return {"ctl": ctl, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": density_15c_kgm3}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(density_15c_kgm3, "densidad_kgm3", False, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    ctl = _ctl_rounding_directo(resultado["ctl"], rounding)
-    return {"ctl": ctl, "alpha": resultado["alpha"], "k0": resultado["k0"],
-            "k1": resultado["k1"], "k2": resultado["k2"], "product_efectivo": producto_efectivo}
+    r = _fx80_estado_iterativa(_fx80_directa("T54", density_15c_kgm3, observed_temp_c, product, rounding),
+                               "API Table54 1980")
+    return {"ctl": r["ctl"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["producto"], "fuera_de_rango": r["oor"]}
 
 
 # ===========================================================================
@@ -2671,7 +3596,10 @@ def _f_compressibility_2004(observed_temp_f: float, rho_base_kgm3: float) -> flo
     t_corr = _micro_correccion_temp_2004(observed_temp_f)
     exponente = ((t_corr * _CPL_A + _CPL_B) / (rho_base_kgm3 * rho_base_kgm3)
                  + (t_corr * _CPL_C - _CPL_D))
-    return math.exp(exponente) * _CPL_SCALE
+    try:
+        return math.exp(exponente) * _CPL_SCALE
+    except OverflowError:
+        return math.inf  # C-38: el binario sigue con exp() = inf (antes: OverflowError)
 
 
 def _cpl_2004(f_per_psi: float, pressure_psig: float) -> float:
@@ -2719,16 +3647,49 @@ def _ctpl_2004_iter(product: Product, rho_obs_kgm3: float, observed_temp_f: floa
     NUEVO en cada paso con la densidad candidata YA ACTUALIZADA, dejando que
     el switch de region se re-evalue de forma auto-consistente con la propia
     convergencia (nunca un mecanismo de '2 pasadas' como en 1980)."""
+    # C-38 (2026-11-17): reemplaza la sustitucion sucesiva por el bucle real de
+    # FUN_180105b64 (ghidra_api_mpms_xll_output.txt ~2226-2300): primero se
+    # evalua el nucleo y se comprueba el residuo |rho_obs - CTPL*rho| < 1e-6
+    # (DAT_180193dc8); si no basta, paso de Newton
+    #   rho += (rho_obs/(CTL*CPL) - rho) / D,
+    #   D = 1 + CPL*(-200000)*P*F*(0.02326*T + 7.9392)/rho^2 + (1.6*a*dT + 1)*c*a*dT,
+    # con dT = T - 60 F y c segun producto (Crude 2.0; productos 2 a 6 por rho:
+    # 1.5 / 8.5 / 2.0 / 1.3; Lube 1.0). Mas de 14 pasos = codigo 3, "No
+    # convergence within 15 iterations" (antes se devolvia un numero sin aviso).
+    # Verificado contra el nucleo real: status y base iguales en 56796 casos
+    # (Tables 5/23/53/59), error de base <= 7.8e-12; antes 412 a 553 casos por
+    # tabla con base distinta y unos 1700 por tabla sin aviso de no convergencia.
+    def _c_newton(rho: float) -> float:
+        if product == 1:
+            return 2.0
+        if 2 <= product <= 6:
+            if rho < 770.352:
+                return 1.5
+            if rho < 787.5195:
+                return 8.5
+            if rho < 838.3127:
+                return 2.0
+            return 1.3
+        if product == 7:
+            return 1.0
+        return 0.0
+
     rho_base = rho_obs_kgm3
-    resultado: dict = {}
-    for _ in range(max_iter):
+    resultado = _ctpl_2004_direct(product, rho_base, observed_temp_f, pressure_psig)
+    pasos = 0
+    # `not (... < tol)` y no `>= tol`: con un residuo NaN el binario sigue
+    # iterando hasta el codigo 3; con `>=` el NaN se tomaba como convergido.
+    while not (abs(rho_obs_kgm3 - resultado["ctpl"] * rho_base) < tol):
+        a = resultado["alpha"]
+        d_t = observed_temp_f - 60.0
+        deriv = ((resultado["cpl"] * -200000.0 * pressure_psig * resultado["f"]
+                  * (observed_temp_f * 0.02326 + 7.9392)) / (rho_base * rho_base)
+                 + (a * 1.6 * d_t + 1.0) * _c_newton(rho_base) * a * d_t + 1.0)
+        rho_base = (rho_obs_kgm3 / (resultado["cpl"] * resultado["ctl"]) - rho_base) / deriv + rho_base
+        pasos += 1
+        if pasos > max_iter - 1:
+            raise ArithmeticError("No convergence within 15 iterations (API MPMS 11.1, 2004).")
         resultado = _ctpl_2004_direct(product, rho_base, observed_temp_f, pressure_psig)
-        ctpl = resultado["ctpl"]
-        nuevo = rho_obs_kgm3 / ctpl if ctpl != 0 else rho_base
-        if abs(nuevo - rho_base) < tol:
-            rho_base = nuevo
-            break
-        rho_base = nuevo
     return rho_base, resultado
 
 
@@ -3185,9 +4146,12 @@ def api_mpms_11_2_1m(density_kgm3: float, temp_c: float, pressure_bar_g: float,
         if clamp_negative_net_pressure and p1 < p2 and denom > 1.0:
             denom = 1.0
     cpl = 1.0 / denom if denom != 0.0 else 1.0
-    fuera_de_rango = not (MPMS_11_2_1M_RHO_RANGE[0] <= density_kgm3 <= MPMS_11_2_1M_RHO_RANGE[1]
-                          and MPMS_11_2_1M_T_RANGE_C[0] <= temp_c <= MPMS_11_2_1M_T_RANGE_C[1]
-                          and MPMS_11_2_1M_P_RANGE_KPA[0] <= p1 <= MPMS_11_2_1M_P_RANGE_KPA[1])
+    # C-53 (2026-11-19): como FUN_1800e303c, el rango se evalua con la densidad y la temperatura YA
+    # redondeadas (si rounding=1) y tambien se verifica la presion de equilibrio (0..10300 kPa).
+    fuera_de_rango = not (MPMS_11_2_1M_RHO_RANGE[0] <= d <= MPMS_11_2_1M_RHO_RANGE[1]
+                          and MPMS_11_2_1M_T_RANGE_C[0] <= t <= MPMS_11_2_1M_T_RANGE_C[1]
+                          and MPMS_11_2_1M_P_RANGE_KPA[0] <= p1 <= MPMS_11_2_1M_P_RANGE_KPA[1]
+                          and MPMS_11_2_1M_P_RANGE_KPA[0] <= p2 <= MPMS_11_2_1M_P_RANGE_KPA[1])
     return {"f": f, "cpl": cpl, "fuera_de_rango_oficial": fuera_de_rango}
 
 
@@ -3265,9 +4229,12 @@ def api_mpms_11_2_1(api_gravity: float, temp_f: float, pressure_psig: float,
         if clamp_negative_net_pressure and p1 < p2 and denom > 1.0:
             denom = 1.0
     cpl = 1.0 / denom if denom != 0.0 else 1.0
-    fuera_de_rango = not (MPMS_11_2_1_API_RANGE[0] <= api_gravity <= MPMS_11_2_1_API_RANGE[1]
-                          and MPMS_11_2_1_T_RANGE_F[0] <= temp_f <= MPMS_11_2_1_T_RANGE_F[1]
-                          and MPMS_11_2_1_P_RANGE_PSIG[0] <= p1 <= MPMS_11_2_1_P_RANGE_PSIG[1])
+    # C-37 (2026-11-17): bandera igual a FUN_1800e2d5c: API y T ya redondeados
+    # (si Rounding), y tambien Pe fuera de 0..1500 psig (antes no se miraba).
+    fuera_de_rango = not (MPMS_11_2_1_API_RANGE[0] <= api <= MPMS_11_2_1_API_RANGE[1]
+                          and MPMS_11_2_1_T_RANGE_F[0] <= t <= MPMS_11_2_1_T_RANGE_F[1]
+                          and MPMS_11_2_1_P_RANGE_PSIG[0] <= p1 <= MPMS_11_2_1_P_RANGE_PSIG[1]
+                          and MPMS_11_2_1_P_RANGE_PSIG[0] <= p2 <= MPMS_11_2_1_P_RANGE_PSIG[1])
     return {"f": f, "cpl": cpl, "fuera_de_rango_oficial": fuera_de_rango}
 
 
@@ -3287,11 +4254,29 @@ def _round_n(x: float, n: int) -> float:
     a `n` decimales, exactamente como lo hace el binario (usado para los 2
     pasos de redondeo OBLIGATORIO -- no opcional -- dentro del nucleo de
     11.2.2/11.2.2M). Solo se necesitan n=0 (entero) y n=3 (3 decimales) para
-    esta familia."""
-    mult = 10.0 ** n
+    esta familia.
+
+    C-36 (2026-11-17): el binario NO divide por 10**n; multiplica por el
+    inverso que arma FUN_1800e1bc8 (literales 0.1/0.01/0.001/0.0001 y, para
+    n >= 5, productos sucesivos por 1e-4). Dividir daba 1 ulp distinto en
+    mitades exactas (p.ej. F = 1.015e-4 con API Rounding se veia 0.000101 en
+    vez de 0.000102)."""
+    if n < 0:
+        mult = 10.0 ** n
+        if x >= 0.0:
+            return math.floor(mult * x + 0.5) / mult
+        return math.ceil(mult * x - 0.5) / mult
+    mult, inv = 1.0, 1.0
+    if n > 0:
+        r = (n - 1) & 3
+        mult = (10.0, 100.0, 1000.0, 10000.0)[r]
+        inv = (0.1, 0.01, 0.001, 0.0001)[r]
+        for _ in range((n - 1) >> 2):
+            mult *= 10000.0
+            inv *= 1e-4
     if x >= 0.0:
-        return math.floor(mult * x + 0.5) / mult
-    return math.ceil(mult * x - 0.5) / mult
+        return math.floor(mult * x + 0.5) * inv
+    return math.ceil(mult * x - 0.5) * inv
 
 
 # Constantes DAT_ del nucleo compartido (byte-exactas, `.xll`) -- mismos
@@ -3550,9 +4535,16 @@ def api_mpms_11_2_2(rd_60f: float, temp_f: float, pressure_psig: float,
     cpl = 1.0 / cpl_denom if cpl_denom != 0.0 else 1.0
     if rounding != 0:
         cpl = _round_n(cpl, 4)
-    fuera_de_rango = not (MPMS_11_2_2_RD_RANGE[0] <= rd_60f <= MPMS_11_2_2_RD_RANGE[1]
-                          and MPMS_11_2_2_T_RANGE_F[0] <= temp_f <= MPMS_11_2_2_T_RANGE_F[1]
-                          and MPMS_11_2_2_P_RANGE_PSIG[0] <= (p1 - p2 if p2 > 0.0 else p1) <= MPMS_11_2_2_P_RANGE_PSIG[1])
+    # C-37 (2026-11-17): bandera igual a FUN_1800e32e8: RD < 0.35 o RD >= 0.638,
+    # T fuera de -50..140 F, presion neta (P - Pe si Pe > 0, recortada a 0) sobre
+    # 2200 psig, o T por encima de la pseudocritica. Una P negativa NO marca.
+    p_chk = p1
+    if p2 > 0.0:
+        p_chk = max(p1 - p2, 0.0)
+    fuera_de_rango = (rd_60f < MPMS_11_2_2_RD_RANGE[0] or rd_60f >= MPMS_11_2_2_RD_RANGE[1]
+                      or temp_f < MPMS_11_2_2_T_RANGE_F[0] or temp_f > MPMS_11_2_2_T_RANGE_F[1]
+                      or p_chk > MPMS_11_2_2_P_RANGE_PSIG[1]
+                      or t_pseudocrit < t_rankine_obs)
     return {"f": f, "cpl": cpl, "fuera_de_rango_oficial": fuera_de_rango}
 
 
@@ -3906,110 +4898,31 @@ def api_density15c_1980(observed_density_kgm3: float, observed_temp_c: float,
     EXACTO el `PRDCUR` (producto realmente seleccionado, expuesto aqui como
     `product_efectivo`) Y el resultado final en el 100% de un barrido de 26
     puntos de densidad cruzando las 4 fronteras (770/779/788/839 kg/m3), en
-    ambas direcciones de `conversion`."""
+    ambas direcciones de `conversion`.
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_combinada`), validada bit a bit contra el
+    binario. `max_iter`/`tol` se ignoran (el binario usa 100 vueltas y 1e-6, o
+    0.05/0.07 con API-2540 Rounding). Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
     if api2540_rounding not in (0, 1, 2, 3):
         raise ValueError("api2540_rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_METRIC[producto_fijo]
-        if conversion == 0:
-            rho_base = observed_density_kgm3
-            if api2540_rounding != 0:
-                # RONDA 31: rama DIRECTA (manual paso 1, "inputs rounded...
-                # provided API2540 rounding enabled") + cascada real de
-                # alpha/CTL (Table 54, mismos truncados que la rama iterativa,
-                # confirmado contra el oraculo: producto=7/Lubricating Oil cae
-                # en un borde de redondeo de 5 decimales donde el CTL "plano"
-                # (full precision) y el CTL "cascada" (truncado como el
-                # binario) redondean a valores DISTINTOS -- ver seccion
-                # "RONDA 31").
-                rho_base = _round_densidad_hidrometro_metric(observed_density_kgm3)
-                delta_t_dir = _round_comercial_n(observed_temp_c, 1) - T_REF_METRIC_1980_C
-                alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho_base, 2), producto_fijo)
-                ctl = _ctl_cascade_api2540(alpha, delta_t_dir)
-            else:
-                alpha = _alpha(k, rho_base)
-                ctl = _ctl_1980(alpha, observed_temp_c - T_REF_METRIC_1980_C)
-            ctl = _ctl_rounding_directo(ctl, api2540_rounding)
-            cpl_res = api_mpms_11_2_1m(rho_base, observed_temp_c, pressure_bar_g,
-                                        equilibrium_pressure_bar_g, rounding,
-                                        clamp_negative_net_pressure=False)
-            cpl, f = cpl_res["cpl"], cpl_res["f"]
-            ctpl = ctl * cpl
-            density_obs_predicha = rho_base * ctpl
-            return {"density_15c": density_obs_predicha, "ctl": ctl, "cpl": cpl, "ctpl": ctpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": rho_base}
-        if api2540_rounding != 0:
-            # RONDA 29: cascada real (ver `_iterar_api2540_cascade` y seccion
-            # "RONDA 29" al final del modulo). Validada 99.19% (2571/2592) contra
-            # el oraculo `.xll` real; el residuo son casos-limite de convergencia
-            # marginal de producto 4, no una discrepancia de formula.
-            t_r = _round_comercial_n(observed_temp_c, 1)
-            dens_r = _round_densidad_hidrometro_metric(observed_density_kgm3)
-            rho_obs_2dec = _round_comercial_n(dens_r, 2)
-            hyd_factor = _hydrometer_factor_metric(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_obs_2dec * hyd_factor, 2)
-            delta_t = t_r - T_REF_METRIC_1980_C
-
-            def _cpl_de_candidato(dens_candidato_kgm3: float) -> float:
-                return api_mpms_11_2_1m(dens_candidato_kgm3, t_r, pressure_bar_g,
-                                         equilibrium_pressure_bar_g, rounding,
-                                         clamp_negative_net_pressure=False)["cpl"]
-
-            dens_c2, ctl, cpl, _ = _iterar_api2540_cascade(
-                k, rho_fixed, t_r, delta_t, producto_fijo, _cpl_de_candidato, max_iter)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(dens_c2, 2), producto_fijo)
-            f = api_mpms_11_2_1m(dens_c2, t_r, pressure_bar_g,
-                                  equilibrium_pressure_bar_g, rounding,
-                                  clamp_negative_net_pressure=False)["f"]
-            # RONDA 31: manual step 15 ("the final density at [15C, equilibrium
-            # pressure] is rounded to 1 decimal place") + confirmado en el
-            # decompilado (FUN_1800e62d4, LAB_1800e6ad8: `*param_10 =
-            # FUN_1800e1db4(param_19,1)` cuando param_5(=api2540_rounding)!=0) --
-            # F usa el candidato SIN redondear (`param_19` no se reescribe), solo
-            # el output de densidad se redondea a 1 decimal para mostrar.
-            density_15c_out = _round_comercial_n(dens_c2, 1)
-            return {"density_15c": density_15c_out, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": dens_c2}
-        obs_for_iter = observed_density_kgm3
-        if hydrometer_correction:
-            obs_for_iter = obs_for_iter * _hydrometer_factor_metric(observed_temp_c)
-        rho_base = obs_for_iter
-        ctl = 1.0
-        cpl = 1.0
-        alpha = 0.0
-        for _ in range(max_iter):
-            alpha = _alpha(k, rho_base)
-            ctl = _ctl_1980(alpha, observed_temp_c - T_REF_METRIC_1980_C)
-            cpl = api_mpms_11_2_1m(rho_base, observed_temp_c, pressure_bar_g,
-                                    equilibrium_pressure_bar_g, rounding,
-                                    clamp_negative_net_pressure=False)["cpl"]
-            ctpl = ctl * cpl
-            nuevo = obs_for_iter / ctpl if ctpl != 0 else rho_base
-            if abs(nuevo - rho_base) < tol:
-                rho_base = nuevo
-                break
-            rho_base = nuevo
-        f = api_mpms_11_2_1m(rho_base, observed_temp_c, pressure_bar_g,
-                              equilibrium_pressure_bar_g, rounding,
-                              clamp_negative_net_pressure=False)["f"]
-        return {"density_15c": rho_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": rho_base}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(
-            observed_density_kgm3, "densidad_kgm3", conversion == 1, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    out = {clave: valor for clave, valor in resultado.items() if clave != "_candidato_nativo"}
-    out["product_efectivo"] = producto_efectivo
-    return out
+    r = _fx80_combinada("M", observed_density_kgm3, observed_temp_c, pressure_bar_g, product, api2540_rounding,
+                        1 if hydrometer_correction else 0, 1 if rounding else 0, equilibrium_pressure_bar_g,
+                        1 if conversion == 1 else 2)
+    if r["rc"] == _FX80_RANGO:
+        raise ValueError("Input argument out of range (API Density @15C 1980): status 1, "
+                         "sin resultados para esta entrada.")
+    if r["rc"] == _FX80_ERRCALC:
+        raise ArithmeticError("Calculation error (API Density @15C 1980): status 2.")
+    return {"density_15c": r["res"], "ctl": r["ctl"], "cpl": r["cpl"], "ctpl": r["ctpl"],
+            "f": r["f"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["prod_sel"],
+            "fuera_de_rango_tabla": r["oor_tabla"], "fuera_de_rango_1121": r["oor_1121"]}
 
 
 def api_gravity60f_1980(observed_api: float, observed_temp_f: float,
@@ -4105,112 +5018,31 @@ def api_gravity60f_1980(observed_api: float, observed_temp_f: float,
     y docstring de `_resolver_producto_auto_1980`/`_auto_select_1980`]:
     mismo mecanismo que `api_density15c_1980`, en dominio °API (breakpoints
     37.0/48.0/50.0/52.0), validado end-to-end contra el oraculo `.xll`
-    (`calcular_gravity60f_1980_directo(..., product=2, ...)`)."""
+    (`calcular_gravity60f_1980_directo(..., product=2, ...)`).
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_combinada`), validada bit a bit contra el
+    binario. `max_iter`/`tol` se ignoran (el binario usa 100 vueltas y 1e-6, o
+    0.05/0.07 con API-2540 Rounding). Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
     if api2540_rounding not in (0, 1, 2, 3):
         raise ValueError("api2540_rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if conversion == 0:
-            api_base = observed_api
-            rho_base = _rd60_to_density_kgm3(141.5 / (131.5 + api_base))
-            if api2540_rounding != 0:
-                # RONDA 31: mismo tratamiento que `api_density15c_1980` (ver su
-                # docstring, seccion "RONDA 31") -- rama DIRECTA con inputs
-                # redondeados (API a 1 decimal, mismo hidrometro que la rama
-                # iterativa, RONDA 29) + cascada real de alpha/CTL (Table 6) en
-                # vez de formula de precision completa.
-                api_base = _round_comercial_n(observed_api, 1)
-                rho_base = _rd60_to_density_kgm3(141.5 / (131.5 + api_base))
-                delta_t_dir = _round_comercial_n(observed_temp_f, 1) - T_REF_US_1980_F
-                alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho_base, 2), producto_fijo)
-                ctl = _ctl_cascade_api2540(alpha, delta_t_dir)
-            else:
-                alpha = _alpha(k, rho_base)
-                ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-            ctl = _ctl_rounding_directo(ctl, api2540_rounding)
-            cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                       equilibrium_pressure_psig, rounding,
-                                       clamp_negative_net_pressure=False)
-            cpl, f = cpl_res["cpl"], cpl_res["f"]
-            ctpl = ctl * cpl
-            rho_obs_equiv = rho_base * ctpl
-            api_obs_predicho = 141.5 / _density_kgm3_to_rd60(rho_obs_equiv) - 131.5
-            return {"api_60f": api_obs_predicho, "ctl": ctl, "cpl": cpl, "ctpl": ctpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": api_base}
-        if api2540_rounding != 0:
-            # RONDA 29: cascada real (ver `_iterar_api2540_cascade` y seccion
-            # "RONDA 29" al final del modulo). Validada 99.19% (2571/2592) contra
-            # el oraculo `.xll` real; el residuo son casos-limite de convergencia
-            # marginal de producto 4, no una discrepancia de formula.
-            api_r = _round_comercial_n(observed_api, 1)
-            t_r = _round_comercial_n(observed_temp_f, 1)
-            rho_obs_2dec = _round_comercial_n(_rd60_to_density_kgm3(141.5 / (131.5 + api_r)), 2)
-            hyd_factor = _hydrometer_factor(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_obs_2dec * hyd_factor, 2)
-            delta_t = t_r - T_REF_US_1980_F
-
-            def _cpl_de_candidato(dens_candidato_kgm3: float) -> float:
-                api_candidato = (141.5 / _density_kgm3_to_rd60(dens_candidato_kgm3) - 131.5
-                                  if dens_candidato_kgm3 != 0 else 0.0)
-                return api_mpms_11_2_1(api_candidato, t_r, pressure_psig,
-                                        equilibrium_pressure_psig, rounding,
-                                        clamp_negative_net_pressure=False)["cpl"]
-
-            dens_c2, ctl, cpl, _ = _iterar_api2540_cascade(
-                k, rho_fixed, t_r, delta_t, producto_fijo, _cpl_de_candidato, max_iter)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(dens_c2, 2), producto_fijo)
-            if dens_c2 == 0.0:
-                api_base = 0.0
-            else:
-                api_base = _round_comercial_n(141.5 / _density_kgm3_to_rd60(dens_c2) - 131.5, 1)
-            f = api_mpms_11_2_1(api_base, t_r, pressure_psig,
-                                 equilibrium_pressure_psig, rounding,
-                                 clamp_negative_net_pressure=False)["f"]
-            return {"api_60f": api_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": api_base}
-        rd_obs = 141.5 / (131.5 + observed_api)
-        rho_obs_for_iter = _rd60_to_density_kgm3(rd_obs)
-        if hydrometer_correction:
-            rho_obs_for_iter = rho_obs_for_iter * _hydrometer_factor(observed_temp_f)
-        rho_base = rho_obs_for_iter
-        ctl = 1.0
-        cpl = 1.0
-        alpha = 0.0
-        for _ in range(max_iter):
-            alpha = _alpha(k, rho_base)
-            ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-            api_base = 141.5 / _density_kgm3_to_rd60(rho_base) - 131.5
-            cpl = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding,
-                                   clamp_negative_net_pressure=False)["cpl"]
-            ctpl = ctl * cpl
-            nuevo = rho_obs_for_iter / ctpl if ctpl != 0 else rho_base
-            if abs(nuevo - rho_base) < tol:
-                rho_base = nuevo
-                break
-            rho_base = nuevo
-        api_base = 141.5 / _density_kgm3_to_rd60(rho_base) - 131.5
-        f = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                             equilibrium_pressure_psig, rounding,
-                             clamp_negative_net_pressure=False)["f"]
-        return {"api_60f": api_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": api_base}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(
-            observed_api, "api", conversion == 1, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    out = {clave: valor for clave, valor in resultado.items() if clave != "_candidato_nativo"}
-    out["product_efectivo"] = producto_efectivo
-    return out
+    r = _fx80_combinada("API", observed_api, observed_temp_f, pressure_psig, product, api2540_rounding,
+                        1 if hydrometer_correction else 0, 1 if rounding else 0, equilibrium_pressure_psig,
+                        1 if conversion == 1 else 2)
+    if r["rc"] == _FX80_RANGO:
+        raise ValueError("Input argument out of range (API Gravity @60F 1980): status 1, "
+                         "sin resultados para esta entrada.")
+    if r["rc"] == _FX80_ERRCALC:
+        raise ArithmeticError("Calculation error (API Gravity @60F 1980): status 2.")
+    return {"api_60f": r["res"], "ctl": r["ctl"], "cpl": r["cpl"], "ctpl": r["ctpl"],
+            "f": r["f"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["prod_sel"],
+            "fuera_de_rango_tabla": r["oor_tabla"], "fuera_de_rango_1121": r["oor_1121"]}
 
 
 def api_reldensity60f_1980(observed_rd: float, observed_temp_f: float,
@@ -4309,119 +5141,31 @@ def api_reldensity60f_1980(observed_rd: float, observed_temp_f: float,
     y docstring de `_resolver_producto_auto_1980`/`_auto_select_1980`]:
     mismo mecanismo que `api_density15c_1980`, en dominio RD adimensional
     (breakpoints 0.771/0.779/0.789/0.84), validado end-to-end contra el
-    oraculo `.xll` (`calcular_rd60f_1980_directo(..., product=2, ...)`)."""
+    oraculo `.xll` (`calcular_rd60f_1980_directo(..., product=2, ...)`).
+
+    [C-41, 2026-11-18] El calculo lo hace ahora la replica literal del nucleo de
+    FlowXpert.xll (seccion C-41, `_fx80_combinada`), validada bit a bit contra el
+    binario. `max_iter`/`tol` se ignoran (el binario usa 100 vueltas y 1e-6, o
+    0.05/0.07 con API-2540 Rounding). Lo anterior de este docstring es historia de las rondas
+    previas y puede no describir el calculo actual.
+    """
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
     if api2540_rounding not in (0, 1, 2, 3):
         raise ValueError("api2540_rounding debe ser 0/1/2/3 (Disabled/Enabled/"
                           "'Enabled (table values)'/'Enabled (5 decimal places)').")
-
-    def _ejecutar(producto_fijo: int) -> dict:
-        k = K_US[producto_fijo]
-        if conversion == 0:
-            rd_base = observed_rd
-            if api2540_rounding != 0:
-                # RONDA 31: mismo tratamiento que `api_density15c_1980`/
-                # `api_gravity60f_1980` (ver seccion "RONDA 31") -- rama DIRECTA
-                # con inputs redondeados (RD a la graduacion real de hidrometro
-                # 0.0005, mismo mecanismo que la rama iterativa, RONDA 30) +
-                # cascada real de alpha/CTL (Table 24) en vez de formula de
-                # precision completa.
-                rd_base = _round_comercial_n(observed_rd * 2.0, 3) / 2.0
-            rho_base = _rd60_to_density_kgm3(rd_base)
-            if api2540_rounding != 0:
-                delta_t_dir = _round_comercial_n(observed_temp_f, 1) - T_REF_US_1980_F
-                alpha = _alpha_cascade_api2540(k, _round_comercial_n(rho_base, 2), producto_fijo)
-                ctl = _ctl_cascade_api2540(alpha, delta_t_dir)
-            else:
-                alpha = _alpha(k, rho_base)
-                ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-            ctl = _ctl_rounding_directo(ctl, api2540_rounding)
-            api_base = 141.5 / rd_base - 131.5
-            cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                       equilibrium_pressure_psig, rounding,
-                                       clamp_negative_net_pressure=False)
-            cpl, f = cpl_res["cpl"], cpl_res["f"]
-            ctpl = ctl * cpl
-            rho_obs_equiv = rho_base * ctpl
-            rd_obs_predicho = _density_kgm3_to_rd60(rho_obs_equiv)
-            return {"rd_60f": rd_obs_predicho, "ctl": ctl, "cpl": cpl, "ctpl": ctpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": rd_base}
-        if api2540_rounding != 0:
-            # RONDA 30: cascada real (ver `_iterar_api2540_cascade` y seccion
-            # "RONDA 30" al final del modulo). Validada 98.84% (2562/2592) contra
-            # el oraculo `.xll` real; el residuo son casos-limite de convergencia
-            # marginal de producto 4 (oor1=4), mismo patron que
-            # `api_density15c_1980`/`api_gravity60f_1980` (RONDA 29).
-            t_r = _round_comercial_n(observed_temp_f, 1)
-            # RD se redondea a la graduacion REAL del hidrometro (0.0005), NO a 1
-            # decimal como °API/kg-m3 -- confirmado por desensamblado x64 directo
-            # (RONDA 30): `round_comercial(observed_rd*2.0, 3) / 2.0` replica
-            # EXACTO la secuencia real `mulsd xmm11,[2.0]; call FUN_1800e1db4(x,3);
-            # mulsd xmm11,xmm6(=0.5)` de `FUN_1800e8494`.
-            rd_r = _round_comercial_n(observed_rd * 2.0, 3) / 2.0
-            rho_from_rd = rd_r * RHO_WATER_60F_KGM3
-            rho_2dec = _round_comercial_n(rho_from_rd, 2)
-            hyd_factor = _hydrometer_factor(t_r) if hydrometer_correction else 1.0
-            rho_fixed = _round_comercial_n(rho_2dec * hyd_factor, 2)
-            delta_t = t_r - T_REF_US_1980_F
-
-            def _cpl_de_candidato(dens_candidato_kgm3: float) -> float:
-                api_candidato = (141.5 / _density_kgm3_to_rd60(dens_candidato_kgm3) - 131.5
-                                  if dens_candidato_kgm3 != 0 else 0.0)
-                return api_mpms_11_2_1(api_candidato, t_r, pressure_psig,
-                                        equilibrium_pressure_psig, rounding,
-                                        clamp_negative_net_pressure=False)["cpl"]
-
-            dens_c2, ctl, cpl, _ = _iterar_api2540_cascade(
-                k, rho_fixed, t_r, delta_t, producto_fijo, _cpl_de_candidato, max_iter)
-            alpha = _alpha_cascade_api2540(k, _round_comercial_n(dens_c2, 2), producto_fijo)
-            rd_base = _round_comercial_n(dens_c2 / RHO_WATER_60F_KGM3, 4)
-            api_base_for_f = (141.5 / _density_kgm3_to_rd60(dens_c2) - 131.5
-                               if dens_c2 != 0 else 0.0)
-            f = api_mpms_11_2_1(api_base_for_f, t_r, pressure_psig,
-                                 equilibrium_pressure_psig, rounding,
-                                 clamp_negative_net_pressure=False)["f"]
-            return {"rd_60f": rd_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                    "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                    "_candidato_nativo": rd_base}
-        rho_obs_for_iter = _rd60_to_density_kgm3(observed_rd)
-        if hydrometer_correction:
-            rho_obs_for_iter = rho_obs_for_iter * _hydrometer_factor(observed_temp_f)
-        rho_base = rho_obs_for_iter
-        ctl = 1.0
-        cpl = 1.0
-        alpha = 0.0
-        for _ in range(max_iter):
-            alpha = _alpha(k, rho_base)
-            ctl = _ctl_1980(alpha, observed_temp_f - T_REF_US_1980_F)
-            api_base = 141.5 / _density_kgm3_to_rd60(rho_base) - 131.5
-            cpl = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding,
-                                   clamp_negative_net_pressure=False)["cpl"]
-            ctpl = ctl * cpl
-            nuevo = rho_obs_for_iter / ctpl if ctpl != 0 else rho_base
-            if abs(nuevo - rho_base) < tol:
-                rho_base = nuevo
-                break
-            rho_base = nuevo
-        rd_base = _density_kgm3_to_rd60(rho_base)
-        f = api_mpms_11_2_1(141.5 / rd_base - 131.5, observed_temp_f, pressure_psig,
-                             equilibrium_pressure_psig, rounding,
-                             clamp_negative_net_pressure=False)["f"]
-        return {"rd_60f": rd_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl,
-                "f": f, "alpha": alpha, "k0": k.k0, "k1": k.k1, "k2": k.k2,
-                "_candidato_nativo": rd_base}
-
-    if product == 2:
-        resultado, producto_efectivo = _auto_select_1980(
-            observed_rd, "rd", conversion == 1, _ejecutar)
-    else:
-        resultado, producto_efectivo = _ejecutar(product), product
-    out = {clave: valor for clave, valor in resultado.items() if clave != "_candidato_nativo"}
-    out["product_efectivo"] = producto_efectivo
-    return out
+    r = _fx80_combinada("RD", observed_rd, observed_temp_f, pressure_psig, product, api2540_rounding,
+                        1 if hydrometer_correction else 0, 1 if rounding else 0, equilibrium_pressure_psig,
+                        1 if conversion == 1 else 2)
+    if r["rc"] == _FX80_RANGO:
+        raise ValueError("Input argument out of range (API Rel. Density @60F 1980): status 1, "
+                         "sin resultados para esta entrada.")
+    if r["rc"] == _FX80_ERRCALC:
+        raise ArithmeticError("Calculation error (API Rel. Density @60F 1980): status 2.")
+    return {"rd_60f": r["res"], "ctl": r["ctl"], "cpl": r["cpl"], "ctpl": r["ctpl"],
+            "f": r["f"], "alpha": r["alpha"], "k0": r["k0"], "k1": r["k1"], "k2": r["k2"],
+            "product_efectivo": r["prod_sel"],
+            "fuera_de_rango_tabla": r["oor_tabla"], "fuera_de_rango_1121": r["oor_1121"]}
 
 
 # ===========================================================================
@@ -4495,6 +5239,27 @@ def _ctl_1952_metric_lookup(density_kgm3: float, temp_c: float) -> float | None:
 _TABLE_1952_METRIC_BLOB = base64.b64decode(TABLE_1952_METRIC_BLOB_B64)
 
 
+def _t54_1952_esc(dens_esc: float, temp_c: float) -> float | None:
+    """C-36: CTL de la Tabla 54 (1952) con la densidad en unidades ESCALADAS
+    (kg/m3 / 1000), como FUN_1800f9b24 -> FUN_1800f7d60 (clave = x * 1000).
+    None si cae fuera de la tabla."""
+    clave, t2 = dens_esc * 1000.0, temp_c * 2.0
+    if not _cubierto_1952_us(_ROWS_1952_TABLE54, clave, t2, tol_col=_TOL_T53):
+        return None
+    return _lookup_1952_us_table(_ROWS_1952_TABLE54, _TABLE_1952_METRIC_BLOB, 10000.0, clave, t2,
+                                 tol_col=_TOL_T53, tol_key=_TOL_GRILLA_1952, col_scale=0.5)
+
+
+def _t53_1952_esc(dens_esc: float, temp_c: float) -> float | None:
+    """C-36: Tabla 53 (1952) en unidades ESCALADAS (entrada y salida en
+    kg/m3 / 1000), como FUN_1800f9afc -> FUN_1800f7d60. None fuera de tabla."""
+    clave, t2 = dens_esc * 1000.0, temp_c * 2.0
+    if not _cubierto_1952_us(_ROWS_1952_TABLE53, clave, t2, tol_col=_TOL_T53):
+        return None
+    return _lookup_1952_us_table(_ROWS_1952_TABLE53, _TABLE_1952_TABLE53_BLOB, 10000.0, clave, t2,
+                                 tol_col=_TOL_T53, tol_key=_TOL_GRILLA_1952, col_scale=0.5)
+
+
 def api_table54_1952(density_15c_kgm3: float, observed_temp_c: float) -> dict:
     """Densidad(15°C) -> CTL(T). API MPMS 11.1 (1952) Table 54 (metrico).
     Lectura DIRECTA de la tabla DAT_18028a680 (FUN_1800f9b24), sin iterar.
@@ -4507,12 +5272,9 @@ def api_table54_1952(density_15c_kgm3: float, observed_temp_c: float) -> dict:
     (ctypes, 30000 puntos) daba 3655 valores y 8743 rangos distintos; con
     la busqueda generica sobre columnas *2, 0 y 0. Fuera de la tabla
     (manual Flow-X): CTL=1 y `fuera_de_rango`=True."""
-    t2 = observed_temp_c * 2.0
-    if not _cubierto_1952_us(_ROWS_1952_TABLE54, density_15c_kgm3, t2, tol_col=_TOL_T53):
+    ctl = _t54_1952_esc(density_15c_kgm3 / 1000.0, observed_temp_c)
+    if ctl is None:
         return {"ctl": 1.0, "fuera_de_rango": True}
-    ctl = _lookup_1952_us_table(_ROWS_1952_TABLE54, _TABLE_1952_METRIC_BLOB, 10000.0,
-                                 density_15c_kgm3, t2,
-                                 tol_col=_TOL_T53, tol_key=_TOL_GRILLA_1952)
     return {"ctl": ctl, "fuera_de_rango": False}
 
 
@@ -4527,14 +5289,12 @@ def api_table53_1952(observed_density_kgm3: float, observed_temp_c: float) -> di
     (DAT_18028a680) y daba hasta +0.069 % contra FlowXpert. `ctl` es el de
     Table54 en el punto resultante (salida auxiliar). Fuera de la tabla
     (manual Flow-X): Density @15°C=0 y `fuera_de_rango`=True."""
-    t2 = observed_temp_c * 2.0
-    if not _cubierto_1952_us(_ROWS_1952_TABLE53, observed_density_kgm3, t2, tol_col=_TOL_T53):
+    # C-36: como el binario, en unidades escaladas (kg/m3 / 1000) y x1000 al final.
+    d15_esc = _t53_1952_esc(observed_density_kgm3 / 1000.0, observed_temp_c)
+    if d15_esc is None:
         return {"density_15c": 0.0, "ctl": 1.0, "fuera_de_rango": True}
-    density_15c = _lookup_1952_us_table(_ROWS_1952_TABLE53, _TABLE_1952_TABLE53_BLOB, 10.0,
-                                         observed_density_kgm3, t2,
-                                         tol_col=_TOL_T53, tol_key=_TOL_GRILLA_1952)
-    return {"density_15c": density_15c,
-            "ctl": api_table54_1952(density_15c, observed_temp_c)["ctl"],
+    ctl = _t54_1952_esc(d15_esc, observed_temp_c)
+    return {"density_15c": d15_esc * 1000.0, "ctl": 1.0 if ctl is None else ctl,
             "fuera_de_rango": False}
 
 
@@ -4661,58 +5421,82 @@ def api_density15c_1952(observed_density_kgm3: float, observed_temp_c: float,
     oraculo `.xll` ni caso real propio para esas 2 tablas todavia, quedan
     marcadas [LIKELY] (mecanismo [CERTAIN] via decompilacion, magnitud
     numerica exacta sin validar en vivo)."""
+    # C-36 (2026-11-17): reescrito para replicar FUN_1800f8c4c/FUN_1800f8f70
+    # completos (ver ghidra_api1952_xll_output.txt, rama param_6==1 con su
+    # `else`). Cambios contra la version anterior, verificados contra el
+    # nucleo real en 6000 casos aleatorios (densidad 500-1100 kg/m3, T -25 a
+    # 100 C, P y EVP incluyendo 0, valores negativos y +-0.01 bar(g),
+    # Rounding 0/1, ambas conversiones): 6000/6000 iguales (antes 1760/6000).
+    #  1) CTL de la Tabla 54 con `api_table54_1952` (busqueda corregida el
+    #     2026-10-01); `_ctl_1952_metric_lookup` recortaba a la mitad el
+    #     rango de T, extrapolaba y podia no converger (838 kg/m3, 25 C).
+    #  2) |P| < 0.01 bar(g) (DAT_180193e68): rama DIRECTA sin iterar,
+    #     densidad a 15 C = Tabla 53 (FUN_1800f9afc) y CTL = Tabla 54 en esa
+    #     densidad (FUN_1800f9b24); la densidad NO se divide por CPL.
+    #  3) CPL: P y EVP pasan a absoluta (+1.01325 bar, FUN_1800e1e64) antes
+    #     de FUN_1800e303c, como ya documentaba api_mpms_11_2_1m (RONDA 9).
+    #     Asi P negativa da CPL = 1 y EVP negativa se usa (antes se ignoraba).
+    #  4) Maximo 20 vueltas: si la vuelta 20 no basta, "no convergio"
+    #     (el binario marca 4 en cuanto el contador pasa de 19).
+    #  5) Densidad en unidades escaladas (kg/m3 / 1000), como el binario, por
+    #     el redondeo a 2 kg/m3 de API Rounding en valores exactos de mitad.
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
+    escala = 1000.0
+    atm_bar = 1.01325
+
+    def _cpl_f(dens_escalada: float) -> tuple[float, float]:
+        res = api_mpms_11_2_1m(dens_escalada * escala, observed_temp_c,
+                               pressure_bar_g + atm_bar,
+                               equilibrium_pressure_bar_g + atm_bar, rounding)
+        return res["cpl"], res["f"]
+
+    def _ctl_54(dens_escalada: float) -> float | None:
+        return _t54_1952_esc(dens_escalada, observed_temp_c)
+
+    x = observed_density_kgm3 / escala
     if conversion == 0:
-        density_15c = observed_density_kgm3
-        ctl = _ctl_1952_metric_lookup(density_15c, observed_temp_c)
+        ctl = _ctl_54(x)
         if ctl is None:
-            raise ValueError(
-                f"(densidad={density_15c} kg/m3, T={observed_temp_c}°C) fuera del "
-                "rango cubierto por los 6 segmentos conocidos de la tabla 1952 "
-                "metrica (500-1105 kg/m3)."
-            )
-        cpl_res = api_mpms_11_2_1m(density_15c, observed_temp_c, pressure_bar_g,
-                                    equilibrium_pressure_bar_g, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
+            raise ArithmeticError(
+                f"Calculation error: (density={observed_density_kgm3} kg/m3, T={observed_temp_c} degC) "
+                "outside the 1952 table (Table 54).")
+        cpl, f = _cpl_f(x)
         ctpl = ctl * cpl
-        density_obs_predicha = density_15c * ctpl
-        return {"density_15c": density_obs_predicha, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
-    # RONDA 26: tolerancia de convergencia REAL (kg/m3), dependiente de
-    # `rounding` -- ver docstring arriba, punto (1). DAT_180193dc0=1e-8 /
-    # DAT_1801df058=1e-4 (escalados), *1000 (DAT_180124818) para pasar a
-    # unidades reales de kg/m3.
-    tol_kgm3 = (1e-8 if rounding == 0 else 1e-4) * 1000.0
-    ctl, cpl, f = 1.0, 1.0, 0.0
-    density_15c = observed_density_kgm3
-    convergio = False
-    for _ in range(max_iter):
-        ctpl_prev = ctl * cpl
-        density_15c = observed_density_kgm3 / ctpl_prev if ctpl_prev != 0 else observed_density_kgm3
-        ctl = _ctl_1952_metric_lookup(density_15c, observed_temp_c)
+        return {"density_15c": ctpl * x * escala, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
+    if abs(pressure_bar_g) < 0.01:
+        d15 = _t53_1952_esc(x, observed_temp_c)
+        if d15 is None:
+            raise ArithmeticError(
+                f"Calculation error: (density={observed_density_kgm3} kg/m3, T={observed_temp_c} degC) "
+                "outside the 1952 table (Table 53).")
+        ctl = _ctl_54(d15)
         if ctl is None:
-            raise ValueError(
-                f"(densidad={density_15c} kg/m3, T={observed_temp_c}°C) fuera del "
-                "rango cubierto por los 6 segmentos conocidos de la tabla 1952 "
-                "metrica (500-1105 kg/m3) durante la iteracion."
-            )
-        cpl_res = api_mpms_11_2_1m(density_15c, observed_temp_c, pressure_bar_g,
-                                    equilibrium_pressure_bar_g, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
-        # RONDA 26: residuo hacia adelante (CTL/CPL FRESCOS, evaluados EN el
-        # candidato de esta vuelta, re-multiplicados) -- NO la diferencia
-        # entre candidatos consecutivos -- ver docstring arriba, punto (2).
-        residuo = ctl * cpl * density_15c - observed_density_kgm3
-        if abs(residuo) < tol_kgm3:
-            convergio = True
+            raise ArithmeticError(
+                f"Calculation error: (density at 15 degC={d15 * escala} kg/m3, T={observed_temp_c} degC) "
+                "outside the 1952 table (Table 54).")
+        cpl, f = _cpl_f(d15)
+        return {"density_15c": d15 * escala, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
+    # RONDA 26: tolerancia (1e-8 / 1e-4 en unidades escaladas) y desfase de
+    # una vuelta entre la densidad devuelta y el CTL/CPL; ver docstring.
+    tol = 1e-8 if rounding == 0 else 1e-4
+    ctl, cpl, f = 1.0, 1.0, 0.0
+    d15 = x
+    for vuelta in range(1, max_iter + 1):
+        d15 = x / (ctl * cpl)
+        ctl = _ctl_54(d15)
+        if ctl is None:
+            raise ArithmeticError(
+                f"Calculation error: (density={d15 * escala} kg/m3, T={observed_temp_c} degC) "
+                "outside the 1952 table (Table 54) during the iteration.")
+        cpl, f = _cpl_f(d15)
+        if vuelta >= max_iter:
             break
-    if not convergio:
-        raise ValueError(
-            f"api_density15c_1952: no convergio en {max_iter} iteraciones "
-            f"(Density_obs={observed_density_kgm3} kg/m3, T={observed_temp_c}°C, "
-            "replica el codigo de error real del binario para este caso)."
-        )
-    return {"density_15c": density_15c, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
+        if abs(ctl * cpl * d15 - x) <= tol:
+            return {"density_15c": d15 * escala, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
+    raise ArithmeticError(
+        f"No convergence within {max_iter} iterations (API 1952 Density @15 degC) "
+        f"(Density_obs={observed_density_kgm3} kg/m3, T={observed_temp_c}°C).")
 
 
 # ===========================================================================
@@ -4779,7 +5563,7 @@ _TOL_T53 = 2.0 * _TOL_GRILLA_1952  # en medios grados
 
 def _lookup_1952_us_table(rows_flat: tuple, blob: bytes, value_scale: float,
                            key: float, temp_f: float, tol_col: float = 1e-9,
-                           tol_key: float = 0.0) -> float | None:
+                           tol_key: float = 0.0, col_scale: float = 1.0) -> float | None:
     """[CERTAIN via dump de bytes crudos + verificacion de encadenamiento +
     validacion cruzada entre 2 pares de tablas independientes, RONDA 12]
     Busqueda de UN punto (eje_primario, T) en una de las 4 tablas reales
@@ -4806,34 +5590,42 @@ def _lookup_1952_us_table(rows_flat: tuple, blob: bytes, value_scale: float,
                 hi = mid
         idx0, idx1 = lo, hi
 
-    def value_at_row(idx: int, col: float) -> float:
-        _key, col_min, col_max, width, row_off = rows_flat[idx]
-
-        def raw_at(c: int) -> int:
-            c = max(col_min, min(col_max, c))
-            return struct.unpack_from("<H", blob, row_off + (c - col_min) * 2)[0]
-
-        col_int = math.ceil(col)
-        col_int_c = max(col_min, min(col_max, col_int))
-        v0 = raw_at(col_int_c)
-        if abs(col - col_int) > tol_col:
-            col1 = col_int - 1 if col_int >= col else col_int + 1
-            if col1 < col_min or col1 > col_max:
-                return v0 / value_scale
-            v1 = raw_at(col1)
-            return (v1 - v0) * (col - col_int) / (col1 - col_int) / value_scale + v0 / value_scale
-        return v0 / value_scale
-
+    # C-36 (2026-11-17): MISMO orden aritmetico que el binario (FUN_1800f8018 /
+    # FUN_1800f7d60 -> FUN_1800f890c / FUN_1800f85cc): por cada columna se
+    # interpola el entero CRUDO entre las 2 filas y recien despues se divide
+    # por la escala; luego se interpola en T en sus unidades reales
+    # (columna * col_scale: 1 F en US, 0.5 C en metrico). El orden anterior
+    # (T primero, filas despues, escala antes) daba 1 ulp distinto en ~30 %
+    # de los puntos y, justo a 0.01 de una fila, cambiaba la fila elegida
+    # aguas abajo (CTL 0.972203 contra 0.972200). Con este orden: bit a bit
+    # igual al binario en 93000 puntos de las Tablas 5/6/23/24/53/54.
     if idx0 != idx1 and abs(key - rows_flat[idx1][0]) <= tol_key:
         idx0 = idx1
-    val0 = value_at_row(idx0, temp_f)
-    if idx0 == idx1 or abs(key - rows_flat[idx0][0]) <= tol_key:
-        return val0
-    val1 = value_at_row(idx1, temp_f)
-    k0, k1 = rows_flat[idx0][0], rows_flat[idx1][0]
-    if k1 == k0:
-        return val0
-    return (val1 - val0) * (key - k0) / (k1 - k0) + val0
+    una_fila = idx0 == idx1 or abs(key - rows_flat[idx0][0]) <= tol_key
+
+    def raw_at(idx: int, c: int) -> int:
+        _key, col_min, col_max, _width, row_off = rows_flat[idx]
+        c = max(col_min, min(col_max, c))
+        return struct.unpack_from("<H", blob, row_off + (c - col_min) * 2)[0]
+
+    def value_at_col(c: int) -> float:
+        r0 = raw_at(idx0, c)
+        if una_fila:
+            return r0 / value_scale
+        k0, k1 = rows_flat[idx0][0], rows_flat[idx1][0]
+        if k1 == k0:
+            return r0 / value_scale
+        r1 = raw_at(idx1, c)
+        return (((key - k0) * (r1 - r0)) / (k1 - k0) + r0) / value_scale
+
+    col_int = math.ceil(temp_f)
+    v0 = value_at_col(col_int)
+    if abs(temp_f - col_int) > tol_col:
+        col1 = col_int + 1 if col_int < temp_f else col_int - 1
+        t_real, t0, t1 = temp_f * col_scale, col_int * col_scale, col1 * col_scale
+        v1 = value_at_col(col1)
+        return ((v1 - v0) * (t_real - t0)) / (t1 - t0) + v0
+    return v0
 
 
 def _cubierto_1952_us(rows_flat: tuple, key: float, temp_f: float,
@@ -5075,154 +5867,82 @@ def api_gravity60f_1952(observed_api: float, observed_temp_f: float,
     `FUN_1800f9544` (no decompilado a fondo esa ronda). Por la regla de oro
     del proyecto, esa ronda dejo la funcion SIN TOCAR el algoritmo hasta una
     ronda futura dedicada -- esa ronda futura es esta (RONDA 27)."""
+    # C-36 (2026-11-17): reescrito siguiendo FUN_1800f90a4/FUN_1800f9544 completos
+    # (ghidra_api1952_xll_output.txt). Contra el nucleo real (4000 casos
+    # aleatorios: API 0-100, T 0-250 F, P y EVP con 0, +-0.01, negativos,
+    # Rounding 0/1, ambas conversiones): antes 2780/4000, ahora 3999/4000 (el
+    # restante: 1 ulp en la salida de Tabla 5 justo a 0.01 API de una fila).
+    #  1) Tablas 5/6 con `api_table5_1952`/`api_table6_1952` (cobertura y
+    #     tolerancia de grilla del binario); `_lookup_1952_us_table` solo
+    #     recortaba al borde y nunca daba fuera de tabla (FX: error).
+    #  2) Formulas del binario: API = 141.5/((141.5/(API_obs+131.5))/CTPL) - 131.5
+    #     y API_obs predicho = 141.5/((141.5/(API+131.5))*CTL*CPL) - 131.5.
+    #  3) La vuelta 20 es "no convergio"; paso de grilla con `_round_n`.
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
-    if conversion == 0:
-        api_base = observed_api
-        ctl = _lookup_1952_us_table(_ROWS_1952_US_TABLE6, _TABLE_1952_US_TABLE6_BLOB,
-                                     10000.0, api_base, observed_temp_f)
-        if ctl is None:
-            raise ValueError(
-                f"(API={api_base}, T={observed_temp_f}F) fuera de la tabla Table6_1952."
-            )
-        cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
-        ctpl = ctl * cpl
-        rd_base = 141.5 / (131.5 + api_base)
-        rd_obs_predicho = rd_base * ctpl
-        api_obs_predicho = 141.5 / rd_obs_predicho - 131.5 if rd_obs_predicho != 0 else api_base
-        return {"api_60f": api_obs_predicho, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
-    # RONDA 27 (2026-09-08) -- HALLAZGO ADICIONAL, fuera del alcance original
-    # de esta ronda (el pendiente de RONDA 26 era SOLO la grilla de 0.1°API,
-    # ver mas abajo), encontrado al construir el barrido de validacion contra
-    # el oraculo DIRECTO: con `pressure_psig` MUY cercano a 0 (|P|<0.01,
-    # `DAT_180193e68`=0.01 -- MISMA constante que la tolerancia de
-    # `rounding=1`, pero usada aqui con un proposito DISTINTO, confirmado
-    # releyendo `FUN_1800f90a4` lineas 1594-1626 de
-    # `ghidra_api1952_xll_output.txt`), el binario NO entra al bucle
-    # iterativo de abajo -- toma una rama COMPLETAMENTE DISTINTA y NO
-    # iterativa: llama a `FUN_1800f9b4c(observed_api, T, &api_base)`, que
-    # decompila a `FUN_1800f8018(&DAT_1801f4e10, 0x19, ...)` -- EXACTAMENTE
-    # la tabla `Table5_1952` (25 segmentos, `DAT_1801f4e10`, ya [CERTAIN] y
-    # con datos extraidos en `_ROWS_1952_US_TABLE5`/`_TABLE_1952_US_TABLE5_
-    # BLOB`, confirmado por identidad exacta de direccion+segmentos con el
-    # docstring de RONDA 12 en `normas/_api_table1952_us_data.py` linea 13 --
-    # aunque esos datos estaban CARGADOS pero JAMAS USADOS por ninguna
-    # funcion del modulo hasta ahora, ni siquiera por `api_table5_1952()`,
-    # que en cambio itera Table6 desde RONDA 12 para el mismo resultado).
-    # Con ese `api_base` (SIN iterar mas), recalcula CTL fresco via Table6 en
-    # ESE punto (`FUN_1800f9b74`) y CPL/F via `api_mpms_11_2_1` (con la
-    # `pressure_psig`/`equilibrium_pressure_psig`/`rounding` reales, SIN
-    # forzarlos a 0) -- y retorna eso directo, sin residuo/tolerancia/grilla
-    # (esos 3 mecanismos de abajo NUNCA se ejecutan en este caso). Validado
-    # EXACTO contra el oraculo DIRECTO `FUN_1800f90a4` (ver
-    # `normas/_api1980_1952_wrappers_xll_directo.py`,
-    # `calcular_gravity60f_1952_core_directo`): barrido de 96 combinaciones
-    # con `pressure_psig=0.0` -- de 79 discrepancias >0.01% ANTES de este
-    # hallazgo (el bucle iterativo daba una respuesta fisicamente distinta,
-    # error tipico 0.5%-3%) a 0 discrepancias reales DESPUES (quedan 1-2
-    # casos de API/T en el borde extremo de la tabla, fuera de rango en
-    # AMBOS lados -- ver seccion mas abajo del docstring del modulo si se
-    # documenta un barrido nuevo). [CERTAIN via decompilacion completa +
-    # identificacion de tabla por direccion/tamaño exactos + oraculo].
-    if abs(pressure_psig) < 0.01:
-        api_base = _lookup_1952_us_table(_ROWS_1952_US_TABLE5, _TABLE_1952_US_TABLE5_BLOB,
-                                          10.0, observed_api, observed_temp_f)
-        if api_base is None:
-            raise ValueError(
-                f"(API={observed_api}, T={observed_temp_f}F) fuera de la tabla Table5_1952."
-            )
-        ctl = _lookup_1952_us_table(_ROWS_1952_US_TABLE6, _TABLE_1952_US_TABLE6_BLOB,
-                                     10000.0, api_base, observed_temp_f)
-        if ctl is None:
-            raise ValueError(
-                f"(API={api_base}, T={observed_temp_f}F) fuera de la tabla Table6_1952 "
-                "(rama de presion~0)."
-            )
-        cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
-        return {"api_60f": api_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
-    # RONDA 27 (2026-09-08): tolerancia dependiente de `rounding` + residuo
-    # hacia adelante ("lag", mismo mecanismo [CERTAIN] ya aplicado en
-    # api_density15c_1952/api_sg60f_1952 en RONDA 26) MAS el paso de grilla
-    # de 0.1 grados API que solo esta funcion tiene -- ver docstring arriba,
-    # seccion "CORREGIDO EN RONDA 27", para el detalle completo de los 3
-    # mecanismos y su evidencia (decompilacion de FUN_1800f90a4/FUN_1800f9544
-    # + lectura byte a byte de las constantes reales del .xll).
-    tol_api = 1e-6 if rounding == 0 else 0.01
     C1, C2 = 141.5, 131.5
 
-    def _ctl_cpl_f(api_candidato):
-        """Recalcula CTL/CPL/CTPL/F FRESCOS en un candidato de API_base y el
-        °API-observado-predicho en ese punto, replicando FUN_1800f9544.
-        Retorna None si el candidato cae fuera de la tabla CTL (equivalente
-        al codigo de error != 0 del binario para ese candidato)."""
-        ctl_c = _lookup_1952_us_table(_ROWS_1952_US_TABLE6, _TABLE_1952_US_TABLE6_BLOB,
-                                       10000.0, api_candidato, observed_temp_f)
-        if ctl_c is None:
+    def _ctl_cpl_f(api_candidato: float):
+        """FUN_1800f9544: CTL (Tabla 6), CPL/F (11.2.1) y API observado predicho.
+        None si el candidato cae fuera de la Tabla 6 (codigo 3 del binario)."""
+        r6 = api_table6_1952(api_candidato, observed_temp_f)
+        if r6["fuera_de_rango"]:
             return None
-        cpl_res_c = api_mpms_11_2_1(api_candidato, observed_temp_f, pressure_psig,
-                                     equilibrium_pressure_psig, rounding)
-        cpl_c, f_c = cpl_res_c["cpl"], cpl_res_c["f"]
-        ctpl_c = ctl_c * cpl_c
-        api_obs_predicho = (api_candidato + C2) / ctpl_c - C2 if ctpl_c != 0 else api_candidato
-        return ctl_c, cpl_c, ctpl_c, f_c, api_obs_predicho
+        res = api_mpms_11_2_1(api_candidato, observed_temp_f, pressure_psig,
+                              equilibrium_pressure_psig, rounding)
+        ctl_c, cpl_c = r6["ctl"], res["cpl"]
+        pred = C1 / ((C1 / (api_candidato + C2)) * ctl_c * cpl_c) - C2
+        return ctl_c, cpl_c, ctl_c * cpl_c, res["f"], pred
 
-    def _round1(y):
-        """round half away from zero a 1 decimal, replica exacta de
-        FUN_1800e1db4(y, 1): floor(10y+0.5)/10 para y>=0, ceil(10y-0.5)/10
-        para y<0 (escala=10, offset=DAT_180124428=0.5, confirmado byte a
-        byte)."""
-        if y >= 0:
-            return math.floor(10.0 * y + 0.5) / 10.0
-        return math.ceil(10.0 * y - 0.5) / 10.0
+    def _fuera(api_v: float) -> ArithmeticError:
+        return ArithmeticError(f"Calculation error: (API={api_v}, T={observed_temp_f} degF) outside the 1952 "
+                               "table (Table 6).")
 
-    ctl, cpl, f = 1.0, 1.0, 0.0
+    if conversion == 0:
+        r = _ctl_cpl_f(observed_api)
+        if r is None:
+            raise _fuera(observed_api)
+        ctl, cpl, ctpl, f, pred = r
+        return {"api_60f": pred, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
+    # |P| < 0.01 psig (DAT_180193e68): rama directa Tabla 5 + Tabla 6 (RONDA 27).
+    if abs(pressure_psig) < 0.01:
+        r5 = api_table5_1952(observed_api, observed_temp_f)
+        if r5["fuera_de_rango"]:
+            raise ArithmeticError(f"Calculation error: (API={observed_api}, T={observed_temp_f} degF) outside "
+                                  "the 1952 table (Table 5).")
+        api_base = r5["api_60f"]
+        r = _ctl_cpl_f(api_base)
+        if r is None:
+            raise _fuera(api_base)
+        ctl, cpl, ctpl, f, _pred = r
+        return {"api_60f": api_base, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
+    # Bucle con tolerancia dependiente de `rounding` y desfase de una vuelta
+    # (RONDA 27), y paso de grilla de 0.1 API (ver docstring).
+    tol_api = 1e-6 if rounding == 0 else 0.01
+    ctl, cpl, ctpl, f = 1.0, 1.0, 1.0, 0.0
+    s_obs = observed_api + C2
     api_base = observed_api
-    convergio = False
-    for _ in range(max_iter):
-        ctpl_prev = ctl * cpl
-        api_base = (observed_api + C2) * ctpl_prev - C2
-        resultado = _ctl_cpl_f(api_base)
-        if resultado is None:
-            raise ValueError(
-                f"(API={api_base}, T={observed_temp_f}F) fuera de la tabla Table6_1952 "
-                "durante la iteracion."
-            )
-        ctl, cpl, ctpl, f, api_obs_predicho = resultado
-        if abs(api_obs_predicho - observed_api) < tol_api:
-            convergio = True
+    for vuelta in range(1, max_iter + 1):
+        api_base = C1 / ((C1 / s_obs) / (ctl * cpl)) - C2
+        r = _ctl_cpl_f(api_base)
+        if r is None:
+            raise _fuera(api_base)
+        ctl, cpl, ctpl, f, pred = r
+        if vuelta >= max_iter:
+            raise ArithmeticError(
+                f"No convergence within {max_iter} iterations (API 1952 Gravity @60 degF) "
+                f"(API_obs={observed_api}, T={observed_temp_f}F).")
+        if abs(pred - observed_api) < tol_api:
             break
-    if not convergio:
-        raise ValueError(
-            f"api_gravity60f_1952: no convergio en {max_iter} iteraciones "
-            f"(API_obs={observed_api}, T={observed_temp_f}F, replica el codigo "
-            "de error real del binario para este caso)."
-        )
-    # Paso de grilla de 0.1 grados API (RONDA 27, SOLO en esta funcion):
-    # intenta primero redondear api_base HACIA ARRIBA a la grilla
-    # (round(api_base+0.05,1)) y si el residuo no cierra dentro de tol_api,
-    # intenta HACIA ABAJO (round(api_base-0.05,1)) -- mismo orden y mismas 2
-    # constantes reales (0.05) de FUN_1800f90a4. Si ninguno cierra, se
-    # mantiene el valor continuo (fallback silencioso identico al binario).
-    api_grid_up = _round1(api_base + 0.05)
-    api_grid_down = _round1(api_base - 0.05)
-    usar_grid = None
-    resultado_grid = _ctl_cpl_f(api_grid_up)
-    if resultado_grid is not None:
-        ctl_g, cpl_g, ctpl_g, f_g, api_obs_predicho_g = resultado_grid
-        if abs(api_obs_predicho_g - observed_api) < tol_api:
-            usar_grid = (api_grid_up, ctl_g, cpl_g, ctpl_g, f_g)
-    if usar_grid is None:
-        resultado_grid = _ctl_cpl_f(api_grid_down)
-        if resultado_grid is not None:
-            ctl_g, cpl_g, ctpl_g, f_g, api_obs_predicho_g = resultado_grid
-            if abs(api_obs_predicho_g - observed_api) < tol_api:
-                usar_grid = (api_grid_down, ctl_g, cpl_g, ctpl_g, f_g)
-    if usar_grid is not None:
-        api_base, ctl, cpl, ctpl, f = usar_grid
+    for api_grid in (_round_n(api_base + 0.05, 1), _round_n(api_base - 0.05, 1)):
+        r = _ctl_cpl_f(api_grid)
+        if r is None:
+            if api_grid < api_base:
+                break  # el binario devuelve el valor continuo si la 2a prueba falla
+            continue
+        if abs(r[4] - observed_api) < tol_api:
+            ctl, cpl, ctpl, f, _pred = r
+            return {"api_60f": api_grid, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
     return {"api_60f": api_base, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
 
 
@@ -5275,55 +5995,58 @@ def api_sg60f_1952(observed_rd: float, observed_temp_f: float,
     patron ya validado con 2 casos reales en `api_density15c_1952`, pero SIN
     caso real propio de ESTA tabla todavia -- exactitud numerica exacta
     marcada [LIKELY] hasta validar en vivo]."""
+    # C-36 (2026-11-17): reescrito siguiendo FUN_1800f9674/FUN_1800f9990 completos
+    # (ghidra_api1952_xll_output.txt). Contra el nucleo real (4000 casos
+    # aleatorios: RD 0.61-1.1, T 0-250 F, P y EVP con 0, +-0.01, negativos,
+    # Rounding 0/1, ambas conversiones): antes 2494/4000, ahora 4000/4000.
+    #  1) |P| < 0.01 psig: rama DIRECTA sin iterar (faltaba): RD@60F = Tabla 23
+    #     (FUN_1800f9aac) y CTL = Tabla 24 en ese RD (FUN_1800f9ad4).
+    #  2) Tablas 23/24 con `api_table23_1952`/`api_table24_1952` (cobertura y
+    #     tolerancia de grilla del binario); `_lookup_1952_us_table` solo
+    #     recortaba al borde y nunca daba fuera de tabla.
+    #  3) Bucle: corta con |residuo| <= tol, y la vuelta 20 es "no convergio".
     if conversion not in (0, 1):
         raise ValueError("conversion debe ser 0 (Standard->Observed) o 1 (Observed->Standard).")
+
+    def _ctl24(rd: float) -> float:
+        r24 = api_table24_1952(rd, observed_temp_f)
+        if r24["fuera_de_rango"]:
+            raise ArithmeticError(f"Calculation error: (RD={rd}, T={observed_temp_f} degF) outside the 1952 "
+                                  "table (Table 24).")
+        return r24["ctl"]
+
+    def _cpl_f(rd: float) -> tuple[float, float]:
+        res = api_mpms_11_2_1(141.5 / rd - 131.5, observed_temp_f, pressure_psig,
+                              equilibrium_pressure_psig, rounding)
+        return res["cpl"], res["f"]
+
     if conversion == 0:
-        rd_base = observed_rd
-        ctl = _lookup_1952_us_table(_ROWS_1952_US_TABLE24, _TABLE_1952_US_TABLE24_BLOB,
-                                     10000.0, rd_base * 1000.0, observed_temp_f)
-        if ctl is None:
-            raise ValueError(
-                f"(RD={rd_base}, T={observed_temp_f}F) fuera de la tabla Table24_1952."
-            )
-        api_base = 141.5 / rd_base - 131.5
-        cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
+        ctl = _ctl24(observed_rd)
+        cpl, f = _cpl_f(observed_rd)
         ctpl = ctl * cpl
-        rd_obs_predicho = rd_base * ctpl
-        return {"rd_60f": rd_obs_predicho, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
-    # RONDA 26: tolerancia dependiente de `rounding`, SIN escala (ver
-    # docstring arriba) + residuo hacia adelante (mismo mecanismo que
-    # api_density15c_1952) en vez de sustitucion sucesiva autoconsistente.
+        return {"rd_60f": ctpl * observed_rd, "ctl": ctl, "cpl": cpl, "ctpl": ctpl, "f": f}
+    if abs(pressure_psig) < 0.01:
+        r23 = api_table23_1952(observed_rd, observed_temp_f)
+        if r23["fuera_de_rango"]:
+            raise ArithmeticError(f"Calculation error: (RD={observed_rd}, T={observed_temp_f} degF) outside "
+                                  "the 1952 table (Table 23).")
+        rd_base = r23["rd_60f"]
+        ctl = _ctl24(rd_base)
+        cpl, f = _cpl_f(rd_base)
+        return {"rd_60f": rd_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
     tol_rd = 1e-8 if rounding == 0 else 1e-4
     ctl, cpl, f = 1.0, 1.0, 0.0
-    rd_base = observed_rd
-    convergio = False
-    for _ in range(max_iter):
-        ctpl_prev = ctl * cpl
-        rd_base = observed_rd / ctpl_prev if ctpl_prev != 0 else observed_rd
-        ctl = _lookup_1952_us_table(_ROWS_1952_US_TABLE24, _TABLE_1952_US_TABLE24_BLOB,
-                                     10000.0, rd_base * 1000.0, observed_temp_f)
-        if ctl is None:
-            raise ValueError(
-                f"(RD={rd_base}, T={observed_temp_f}F) fuera de la tabla Table24_1952 "
-                "durante la iteracion."
-            )
-        api_base = 141.5 / rd_base - 131.5
-        cpl_res = api_mpms_11_2_1(api_base, observed_temp_f, pressure_psig,
-                                   equilibrium_pressure_psig, rounding)
-        cpl, f = cpl_res["cpl"], cpl_res["f"]
-        residuo = ctl * cpl * rd_base - observed_rd
-        if abs(residuo) < tol_rd:
-            convergio = True
+    for vuelta in range(1, max_iter + 1):
+        rd_base = observed_rd / (ctl * cpl)
+        ctl = _ctl24(rd_base)
+        cpl, f = _cpl_f(rd_base)
+        if vuelta >= max_iter:
             break
-    if not convergio:
-        raise ValueError(
-            f"api_sg60f_1952: no convergio en {max_iter} iteraciones "
-            f"(RD_obs={observed_rd}, T={observed_temp_f}F, replica el codigo "
-            "de error real del binario para este caso)."
-        )
-    return {"rd_60f": rd_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
+        if abs(ctl * cpl * rd_base - observed_rd) <= tol_rd:
+            return {"rd_60f": rd_base, "ctl": ctl, "cpl": cpl, "ctpl": ctl * cpl, "f": f}
+    raise ArithmeticError(
+        f"No convergence within {max_iter} iterations (API 1952 SG @60 degF) "
+        f"(RD_obs={observed_rd}, T={observed_temp_f}F).")
 
 
 # ===============================================================================
@@ -5612,6 +6335,38 @@ def _ngl_alpha(x: float, temp_k: float) -> tuple:
     return alpha, fuera_de_rango
 
 
+def _ngl_alpha_fx(x: float, temp_k: float) -> tuple:
+    """C-54 (2026-11-19): mismo resultado que `_ngl_alpha` pero con el ORDEN DE OPERACIONES de
+    `FUN_1800ec10c` (resultado identico bit a bit a la funcion de la norma; `_ngl_alpha` difiere en
+    el ultimo bit en ~35 % de los casos). Lo usan solo las tablas E puras 23E/53E/59E/54E/60E,
+    para que la iteracion secante caiga en el mismo punto que la referencia incluso en los casos
+    mal condicionados. Devuelve (alpha, fuera_de_rango)."""
+    lo, hi, frac = _ngl_bracket(x)
+    f_lo, f_hi = NGL_LPG_TABLE[lo], NGL_LPG_TABLE[hi]
+    tc = (f_hi[1] - f_lo[1]) * frac + f_lo[1]
+    tr = temp_k / tc
+    fuera = False
+    if 1.0 < tr:
+        fuera = True
+        tr = 1.0
+    xx = 1.0 - _NGL_T60F_K / tc
+    razon = (f_lo[2] * f_lo[3]) / (f_hi[2] * f_hi[3])
+    px35 = math.pow(xx, 0.35)
+    px65 = math.pow(xx, 0.65)
+    x2 = xx * xx
+    y = 1.0 - tr
+    g_x_lo = ((x2 * f_lo[6] + px35 * f_lo[4] + x2 * xx * f_lo[7]) / (px65 * f_lo[5] + 1.0) + 1.0) * f_lo[3]
+    py35 = math.pow(y, 0.35)
+    py65 = math.pow(y, 0.65)
+    y2 = y * y
+    g_y_lo = ((y2 * f_lo[6] + py35 * f_lo[4] + y2 * y * f_lo[7]) / (py65 * f_lo[5] + 1.0) + 1.0) * f_lo[3]
+    g_y_hi = ((y2 * f_hi[6] + py35 * f_hi[4] + y2 * y * f_hi[7]) / (py65 * f_hi[5] + 1.0) + 1.0) * f_hi[3]
+    g_x_hi = ((x2 * f_hi[6] + px35 * f_hi[4] + x2 * xx * f_hi[7]) / (px65 * f_hi[5] + 1.0) + 1.0) * f_hi[3]
+    alpha = g_y_lo / (((g_y_lo / (g_y_hi * razon) - 1.0) * frac + 1.0)
+                      * (g_x_lo / ((g_x_lo / (g_x_hi * razon) - 1.0) * frac + 1.0)))
+    return alpha, fuera
+
+
 def _ngl_solve_x(target: float, temp_k: float,
                   lo_bound: float = 0.30, hi_bound: float = 0.70) -> tuple:
     """Halla `x` (densidad relativa reducida) tal que x*alpha(x,T)=`target`,
@@ -5669,6 +6424,47 @@ def _ngl_round_temp_005c(observed_temp_c: float) -> float:
     return _round_comercial_n(observed_temp_c * 2.0, 1) * 0.5
 
 
+def _ngl_en_rango_c53(v: float, lo: float, hi: float, sup_estricto: bool = False) -> bool:
+    tol = 1e-8
+    if sup_estricto:
+        return lo <= v + tol and v - tol < hi
+    return lo <= v + tol and v - tol <= hi
+
+
+def _ngl_observada_c54(objetivo: float, t_k: float, t_ref_k: float | None) -> tuple:
+    """C-53 (2026-11-19): bandera "Calculation out of range" de Table 23E/53E/59E igual a la de
+    la funcion de la norma (FUN_1800ea9dc / FUN_1800eda14 / FUN_1800ef1e4):
+    1) verificacion de entrada (23E: RD 0.2099999..0.7400001 y T 227.1499999..366.1500001 K,
+       FUN_1800eb198; 53E/59E: densidad/999.016 en 0.21..<0.74 y T 227.15..366.15 K,
+       FUN_1800edc20; tolerancia 1e-8),
+    2) cualquier punto de prueba de la iteracion real (FUN_1800eab2c, portada en
+       `_ngl_solve_x_fx`) con T reducida > 1 u objetivo fuera del tramo,
+    3) salida: x en 0.35..0.688 (23E: RD@60F, ya redondeada si rounding=1 -- se revisa en
+       api_table23e) y, en 53E/59E, alpha a la temperatura de referencia.
+    `t_ref_k` None = Table 23E. Lanza ArithmeticError("No convergence ...") si la iteracion de
+    la norma no converge en 20 vueltas (la funcion de referencia devuelve status 3).
+    C-54 (2026-11-19): devuelve (fuera_de_rango, x, alpha_en_T, alpha_ref); x y alpha salen de la
+    MISMA iteracion de la norma, asi los resultados coinciden tambien cuando la ecuacion tiene
+    mas de una raiz (casos extremos fuera de rango). alpha_ref es None para Table 23E."""
+    from ._ngl_lpg_wrappers_puro import _ngl_solve_x_fx
+    if t_ref_k is None:
+        fuera = not (_ngl_en_rango_c53(objetivo, 0.2099999, 0.7400001)
+                     and _ngl_en_rango_c53(t_k, 227.1499999, 366.1500001))
+    else:
+        fuera = not (_ngl_en_rango_c53(objetivo, 0.21, 0.74, sup_estricto=True)
+                     and _ngl_en_rango_c53(t_k, 227.15, 366.15))
+    try:
+        x, alpha_t, oor = _ngl_solve_x_fx(objetivo, t_k, alpha_fn=_ngl_alpha_fx)
+    except ArithmeticError:
+        raise ArithmeticError("No convergence within 20 iterations (GPA TP-27 density solution).")
+    fuera = fuera or oor
+    alpha_ref = None
+    if t_ref_k is not None:
+        alpha_ref, oor_ref = _ngl_alpha_fx(x, t_ref_k)
+        fuera = fuera or oor_ref or not _ngl_en_rango_c53(x, 0.35, 0.688)
+    return bool(fuera), x, alpha_t, alpha_ref
+
+
 def api_table23e(observed_rd: float, observed_temp_c: float, rounding: int = 0) -> dict:
     """RD observada(T) -> RD a 60°F. API 11.2.4 / GPA TP-27 Table 23E.
     [CERTAIN via decompilacion (`FUN_1800a1a20`/`FUN_1800ea9dc`) + caso real
@@ -5688,10 +6484,13 @@ def api_table23e(observed_rd: float, observed_temp_c: float, rounding: int = 0) 
         observed_rd = _round_comercial_n(observed_rd, 4)
         observed_temp_c = _ngl_round_temp_01f(observed_temp_c)
     t_k = observed_temp_c + 273.15
-    x_root, alpha_val, fuera_de_rango = _ngl_solve_x(observed_rd, t_k)
+    # C-54: x y alpha de la iteracion de la norma (FUN_1800eab2c, ver _ngl_observada_c54).
+    fuera_de_rango, _x, alpha_val, _ar = _ngl_observada_c54(observed_rd, t_k, None)
     rd_60f = observed_rd / alpha_val if alpha_val != 0 else 0.0
     if rounding:
         rd_60f = _round_comercial_n(rd_60f, 4)
+    # C-53: la salida RD@60F (redondeada si rounding=1) debe quedar en 0.35..0.688.
+    fuera_de_rango = fuera_de_rango or not _ngl_en_rango_c53(rd_60f, 0.35, 0.688)
     return {"rd_60f": rd_60f, "ctl": alpha_val, "fuera_de_rango": fuera_de_rango}
 
 
@@ -5714,6 +6513,12 @@ def api_table24e(rd_60f: float, observed_temp_c: float, rounding: int = 0) -> di
     alpha_val, fuera_de_rango = _ngl_alpha(rd_60f, t_k)
     if rounding:
         alpha_val = _round_comercial_n(alpha_val, 5)
+    # C-37: verificacion de entrada de FUN_1800ec43c (RD 0.35..0.688 y
+    # T 227.15..366.15 K, tolerancia 1e-8), que el nucleo hace antes del calculo.
+    tol = 1e-8
+    if not (0.35 <= rd_60f + tol and rd_60f - tol <= 0.688
+            and 227.15 <= t_k + tol and t_k - tol <= 366.15):
+        fuera_de_rango = True
     return {"ctl": alpha_val, "fuera_de_rango": fuera_de_rango}
 
 
@@ -5735,13 +6540,30 @@ def api_table53e(observed_density_kgm3: float, observed_temp_c: float, rounding:
     t_obs_k = observed_temp_c + 273.15
     t_ref_k = T_REF_NGL_15C_C + 273.15
     target_rd = observed_density_kgm3 / RHO_WATER_NGL_LPG_KGM3
-    x_root, alpha_obs, oor1 = _ngl_solve_x(target_rd, t_obs_k)
-    alpha_ref, oor2 = _ngl_alpha(x_root, t_ref_k)
+    # C-53/C-54: bandera, x y alpha de la iteracion de la norma (ver _ngl_observada_c54).
+    fuera, x_root, _alpha_obs, alpha_ref = _ngl_observada_c54(target_rd, t_obs_k, t_ref_k)
+    if alpha_ref < 0.0 or x_root <= -1.0:
+        raise ArithmeticError("Calculation error: no valid density solution (GPA TP-27).")
     density_15c = alpha_ref * x_root * RHO_WATER_NGL_LPG_KGM3
-    ctl = observed_density_kgm3 / density_15c if density_15c != 0 else 0.0
+    if density_15c == 0.0 or not math.isfinite(density_15c):
+        raise ArithmeticError("Calculation error: no valid density solution (GPA TP-27).")
+    ctl = observed_density_kgm3 / density_15c
     if rounding:
         density_15c = _round_comercial_n(density_15c, 1)
-    return {"density_15c": density_15c, "ctl": ctl, "fuera_de_rango": oor1 or oor2}
+    return {"density_15c": density_15c, "ctl": ctl, "fuera_de_rango": fuera}
+
+
+def _ngl_fuera_rango_entrada_e(dens_kgm3: float, t_k: float, dens_min: float, dens_max: float,
+                               x_root: float) -> bool:
+    """C-37 (2026-11-17): verificacion de rango de entrada de los nucleos
+    Table 54E / 60E (FUN_1800eeca8 / FUN_1800ef944, tolerancia 1e-8) mas el
+    rango de x que FUN_1800eea6c / FUN_1800ef720 aplican tras resolverlo.
+    Densidad en [dens_min, dens_max) kg/m3, T en [227.15, 366.15] K,
+    x en [0.34995, 0.68805). Constantes leidas del binario."""
+    tol = 1e-8
+    entrada_ok = (dens_min <= dens_kgm3 + tol and dens_kgm3 - tol < dens_max
+                  and 227.15 <= t_k + tol and t_k - tol <= 366.15)
+    return (not entrada_ok) or not (0.34995 <= x_root < 0.68805)
 
 
 def api_table54e(density_15c_kgm3: float, observed_temp_c: float, rounding: int = 0) -> dict:
@@ -5768,14 +6590,22 @@ def api_table54e(density_15c_kgm3: float, observed_temp_c: float, rounding: int 
     t_ref_k = T_REF_NGL_15C_C + 273.15
     t_obs_k = observed_temp_c + 273.15
     target_rd = density_15c_kgm3 / RHO_WATER_NGL_LPG_KGM3
-    x_root, alpha_ref, oor1 = _ngl_solve_x(target_rd, t_ref_k)
-    alpha_obs, oor2 = _ngl_alpha(x_root, t_obs_k)
+    # C-54: x de la iteracion de la norma (FUN_1800eab2c a la temperatura de referencia) y alpha con
+    # el orden de operaciones de FUN_1800ec10c; la bandera sigue la regla de C-37.
+    from ._ngl_lpg_wrappers_puro import _ngl_solve_x_fx
+    try:
+        x_root, _a_it, oor1 = _ngl_solve_x_fx(target_rd, t_ref_k, alpha_fn=_ngl_alpha_fx)
+    except ArithmeticError:
+        raise ArithmeticError("No convergence within 20 iterations (GPA TP-27 density solution).")
+    alpha_ref, _o = _ngl_alpha_fx(x_root, t_ref_k)
+    alpha_obs, oor2 = _ngl_alpha_fx(x_root, t_obs_k)
     ctl = alpha_obs / alpha_ref if alpha_ref != 0 else 0.0
     if rounding:
         ctl = _round_comercial_n(ctl, 5)
     density_obs_predicted = ctl * density_15c_kgm3
+    oor_entrada = _ngl_fuera_rango_entrada_e(density_15c_kgm3, t_obs_k, 351.7, 687.8, x_root)
     return {"ctl": ctl, "density_obs_predicted": density_obs_predicted,
-            "fuera_de_rango": oor1 or oor2}
+            "fuera_de_rango": oor1 or oor2 or oor_entrada}
 
 
 def api_table59e(observed_density_kgm3: float, observed_temp_c: float, rounding: int = 0) -> dict:
@@ -5796,13 +6626,17 @@ def api_table59e(observed_density_kgm3: float, observed_temp_c: float, rounding:
     t_obs_k = observed_temp_c + 273.15
     t_ref_k = T_REF_NGL_20C_C + 273.15
     target_rd = observed_density_kgm3 / RHO_WATER_NGL_LPG_KGM3
-    x_root, alpha_obs, oor1 = _ngl_solve_x(target_rd, t_obs_k)
-    alpha_ref, oor2 = _ngl_alpha(x_root, t_ref_k)
+    # C-53/C-54: bandera, x y alpha de la iteracion de la norma (ver _ngl_observada_c54).
+    fuera, x_root, _alpha_obs, alpha_ref = _ngl_observada_c54(target_rd, t_obs_k, t_ref_k)
+    if alpha_ref < 0.0 or x_root <= -1.0:
+        raise ArithmeticError("Calculation error: no valid density solution (GPA TP-27).")
     density_20c = alpha_ref * x_root * RHO_WATER_NGL_LPG_KGM3
-    ctl = observed_density_kgm3 / density_20c if density_20c != 0 else 0.0
+    if density_20c == 0.0 or not math.isfinite(density_20c):
+        raise ArithmeticError("Calculation error: no valid density solution (GPA TP-27).")
+    ctl = observed_density_kgm3 / density_20c
     if rounding:
         density_20c = _round_comercial_n(density_20c, 1)
-    return {"density_20c": density_20c, "ctl": ctl, "fuera_de_rango": oor1 or oor2}
+    return {"density_20c": density_20c, "ctl": ctl, "fuera_de_rango": fuera}
 
 
 def api_table60e(density_20c_kgm3: float, observed_temp_c: float, rounding: int = 0) -> dict:
@@ -5822,14 +6656,22 @@ def api_table60e(density_20c_kgm3: float, observed_temp_c: float, rounding: int 
     t_ref_k = T_REF_NGL_20C_C + 273.15
     t_obs_k = observed_temp_c + 273.15
     target_rd = density_20c_kgm3 / RHO_WATER_NGL_LPG_KGM3
-    x_root, alpha_ref, oor1 = _ngl_solve_x(target_rd, t_ref_k)
-    alpha_obs, oor2 = _ngl_alpha(x_root, t_obs_k)
+    # C-54: x de la iteracion de la norma (FUN_1800eab2c a la temperatura de referencia) y alpha con
+    # el orden de operaciones de FUN_1800ec10c; la bandera sigue la regla de C-37.
+    from ._ngl_lpg_wrappers_puro import _ngl_solve_x_fx
+    try:
+        x_root, _a_it, oor1 = _ngl_solve_x_fx(target_rd, t_ref_k, alpha_fn=_ngl_alpha_fx)
+    except ArithmeticError:
+        raise ArithmeticError("No convergence within 20 iterations (GPA TP-27 density solution).")
+    alpha_ref, _o = _ngl_alpha_fx(x_root, t_ref_k)
+    alpha_obs, oor2 = _ngl_alpha_fx(x_root, t_obs_k)
     ctl = alpha_obs / alpha_ref if alpha_ref != 0 else 0.0
     if rounding:
         ctl = _round_comercial_n(ctl, 5)
     density_obs_predicted = ctl * density_20c_kgm3
+    oor_entrada = _ngl_fuera_rango_entrada_e(density_20c_kgm3, t_obs_k, 331.7, 683.6, x_root)
     return {"ctl": ctl, "density_obs_predicted": density_obs_predicted,
-            "fuera_de_rango": oor1 or oor2}
+            "fuera_de_rango": oor1 or oor2 or oor_entrada}
 
 
 # ===============================================================================
@@ -6787,6 +7629,39 @@ def api_rd60f_ngl_lpg(observed_rd: float, observed_temp_f: float,
 # actualizado; campo nuevo "Product (selected)" en resultados que muestra
 # `product_efectivo`). Ningun otro archivo modificado.
 # ===============================================================================
+
+
+# ===============================================================================
+# [C-35, 2026-11-16] F de SALIDA redondeado como la pantalla de FlowXpert.
+# Solo la llamada mas externa redondea; el calculo interno (CPL, CTPL,
+# iteraciones) sigue con F completo. Ver normas/_salida_pantalla_fx.py.
+# (unidad que devuelve el motor, unidad de la pantalla de FlowXpert)
+# ===============================================================================
+import sys  # noqa: E402
+from . import _salida_pantalla_fx as _sfx  # noqa: E402
+
+_F_MPA_DESDE_PSI = {"f": ("1/psi", "1/MPa")}
+_F_MPA_DESDE_BAR = {"f": ("1/bar", "1/MPa")}
+_sfx.aplicar(sys.modules[__name__], {
+    # API MPMS 11.2.x: pantalla en 1/MPa
+    "api_mpms_11_2_1": _F_MPA_DESDE_PSI, "api_mpms_11_2_2": _F_MPA_DESDE_PSI,
+    "api_mpms_11_2_1m": _F_MPA_DESDE_BAR, "api_mpms_11_2_2m": _F_MPA_DESDE_BAR,
+    # API 11.1 2004: pantalla en 1/MPa (5/6/23/24 devuelven 1/psi; 53/54/59/60 devuelven 1/bar)
+    "api_table5_2004": _F_MPA_DESDE_PSI, "api_table6_2004": _F_MPA_DESDE_PSI,
+    "api_table23_2004": _F_MPA_DESDE_PSI, "api_table24_2004": _F_MPA_DESDE_PSI,
+    "api_table53_2004": _F_MPA_DESDE_BAR, "api_table54_2004": _F_MPA_DESDE_BAR,
+    "api_table59_2004": _F_MPA_DESDE_BAR, "api_table60_2004": _F_MPA_DESDE_BAR,
+    # API 11.1 1980 y 1952 con presion: pantalla en la misma unidad que devuelve el motor
+    "api_density15c_1980": {"f": ("1/bar", "1/bar")},
+    "api_gravity60f_1980": {"f": ("1/psi", "1/psi")},
+    "api_reldensity60f_1980": {"f": ("1/psi", "1/psi")},
+    "api_density15c_1952": {"f": ("1/bar", "1/bar")},
+    "api_gravity60f_1952": {"f": ("1/psi", "1/psi")},
+    "api_sg60f_1952": {"f": ("1/psi", "1/psi")},
+    # NGL/LPG: pantalla en 1/MPa
+    "api_dens15c_ngl_lpg": _F_MPA_DESDE_BAR, "api_dens20c_ngl_lpg": _F_MPA_DESDE_BAR,
+    "api_rd60f_ngl_lpg": _F_MPA_DESDE_PSI,
+})
 
 
 if __name__ == "__main__":

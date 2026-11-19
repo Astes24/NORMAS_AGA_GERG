@@ -528,7 +528,12 @@ def _gpa_tp15_psia(rd: float, t_f: float, round_tp15: int = 0,
         expo = numer / denom + c4 * rd * rd + c3 * rd + c2
     else:
         if p100_valor_psia <= 0.0:
-            return None, True
+            # C-37 (2026-11-17): FUN_1800efcbc no tiene guarda: exp(log(P100)+...)
+            # da EVP = 0.0 con P100 = 0 (log = -inf) y NaN con P100 < 0, y la
+            # bandera depende solo del rango de RD/T. Antes se devolvia None
+            # (NaN + bandera forzada), lo que rompia la rama 11.2.1(M): sin
+            # convergencia, resultado NaN o bucle infinito en RD60F.
+            return (0.0 if p100_valor_psia == 0.0 else float("nan")), fuera_de_rango
         expo = math.log(p100_valor_psia) + (
             (_TP15_LOG_T_REF - t_f) * numer) / (denom * _TP15_LOG_DENOM_SCALE)
 
@@ -681,10 +686,14 @@ def _ngl_sat(fila, temp_k):
             (math.pow(y, 0.65) * fila[5] + 1.0) + 1.0) * fila[3], tr
 
 
-def _ngl_solve_x_fx(objetivo, temp_k):
+def _ngl_solve_x_fx(objetivo, temp_k, alpha_fn=None):
     """Port de FUN_1800eab2c: x (densidad relativa reducida) con x*alpha(x,T) = objetivo.
     Devuelve (x, alpha, fuera_de_rango). alpha es el del ULTIMO punto de prueba (asi lo deja el binario
-    en *param_4) y x = objetivo/alpha."""
+    en *param_4) y x = objetivo/alpha.
+    `alpha_fn` (C-54): funcion alpha a usar en los puntos de prueba; None = `_ngl_alpha` (sin cambios
+    para los combinados); las tablas E puras pasan `_ngl_alpha_fx` (orden de operaciones de la norma)."""
+    if alpha_fn is None:
+        alpha_fn = _ngl_alpha
     from .API_MPMS_Tables_1980_2004 import NGL_LPG_TABLE as tabla
     t60 = (60.0 + 459.67) / 1.8
     trs, vals, i9 = [], [], -1
@@ -717,7 +726,7 @@ def _ngl_solve_x_fx(objetivo, temp_k):
         x_lo = 0.35
     oor = False
     if b5 or b4:
-        a, o = _ngl_alpha(x_lo, temp_k)
+        a, o = alpha_fn(x_lo, temp_k)
         oor |= o
         f_lo = x_lo * a
     if objetivo < f_lo or f_hi < objetivo:
@@ -737,7 +746,7 @@ def _ngl_solve_x_fx(objetivo, temp_k):
                 if abs(r) > 0.999:
                     r = 0.999 if r >= 0.0 else -0.999
             x2 = (x_hi - x_lo) * r + x_lo
-        a2, o = _ngl_alpha(x2, temp_k)
+        a2, o = alpha_fn(x2, temp_k)
         oor |= o
         f2 = x2 * a2
         d16 = f2 - f_lo
@@ -756,13 +765,13 @@ def _ngl_solve_x_fx(objetivo, temp_k):
             x3 = ((objetivo - f_lo) * l298) / d16 + x_lo
         if x_hi < x3:
             x3 = ((objetivo - f2) * (x_hi - x2)) / l290 + x2
-        a3, o = _ngl_alpha(x3, temp_k)
+        a3, o = alpha_fn(x3, temp_k)
         oor |= o
         f3 = x3 * a3
         if abs(f3 - objetivo) < 1e-8:
             return objetivo / a3, a3, oor
         if n > 19:
-            raise ArithmeticError("FUN_1800eab2c sin convergencia (codigo 0x2d de FlowXpert)")
+            raise ArithmeticError("Densidad NGL/LPG sin convergencia en 20 iteraciones")
         if f3 <= objetivo:
             x_lo, f_lo = x3, f3
             if objetivo < f2:
@@ -822,7 +831,7 @@ def _dens_iter_fx(densidad_kgm3, t_c, p_barg, *, round_11_2_4, round_11_2_2m, ev
         cpl, f, oor_cpl = r["cpl"], r["f"], r["fuera_de_rango_oficial"]
         candidato = rho / ctl / cpl
         if len(historial) >= 100:
-            raise ArithmeticError("Dens NGL/LPG sin convergencia en 100 vueltas (codigo 0x2d de FlowXpert)")
+            raise ArithmeticError("Dens NGL/LPG sin convergencia en 100 iteraciones")
         diff = abs(candidato - historial[-1]) if historial else abs(candidato)
         if diff < tol:
             break
@@ -906,9 +915,15 @@ def _rd60f_iter_fx(rd, t_f, p_psia, *, round_11_2_4, round_11_2_2, evp_mode, evp
         def directo(v):
             return calcular_rd60f_ngl_lpg_puro(v, **kw)
 
+        # C-37: con un candidato NaN las comparaciones de la busqueda de
+        # intervalo son siempre falsas y el bucle no terminaba (congelaba la UI).
+        if math.isnan(nuevo):
+            raise ArithmeticError("RD60F NGL/LPG sin intervalo de solucion")
         ultimo = directo(nuevo)
         lo = hi = nuevo
         f_lo = f_hi = ultimo["rd_std"]
+        if math.isnan(f_lo):
+            raise ArithmeticError("RD60F NGL/LPG sin intervalo de solucion")
         if f_lo <= rd:
             while True:
                 hi += 0.005
@@ -916,7 +931,7 @@ def _rd60f_iter_fx(rd, t_f, p_psia, *, round_11_2_4, round_11_2_2, evp_mode, evp
                     break
                 ultimo = directo(hi)
                 f_hi = ultimo["rd_std"]
-                if f_hi > rd:
+                if f_hi > rd or math.isnan(f_hi):
                     break
         else:
             while True:
@@ -925,10 +940,10 @@ def _rd60f_iter_fx(rd, t_f, p_psia, *, round_11_2_4, round_11_2_2, evp_mode, evp
                     break
                 ultimo = directo(lo)
                 f_lo = ultimo["rd_std"]
-                if f_lo < rd:
+                if f_lo < rd or math.isnan(f_lo):
                     break
         if not ((f_hi - rd) * (f_lo - rd) < 0.0):
-            raise ArithmeticError("RD60F NGL/LPG sin intervalo de solucion (codigo 0x2d de FlowXpert)")
+            raise ArithmeticError("RD60F NGL/LPG sin intervalo de solucion")
         for _ in range(100):
             dx = hi - lo
             xm = hi - (f_hi - rd) * dx / (f_hi - f_lo)
@@ -944,7 +959,7 @@ def _rd60f_iter_fx(rd, t_f, p_psia, *, round_11_2_4, round_11_2_2, evp_mode, evp
                 resultado = xm
                 break
         else:
-            raise ArithmeticError("RD60F NGL/LPG sin convergencia (codigo 0x2d de FlowXpert)")
+            raise ArithmeticError("RD60F NGL/LPG sin convergencia")
         ctl, cpl, f, evp = ultimo["ctl"], ultimo["cpl"], ultimo["compressibility_1_psi"], ultimo["evp_psia"]
         oor_ctl, oor_cpl, oor_evp = ultimo["oor_ctl"], ultimo["oor_cpl"], ultimo["oor_evp"]
     if round_11_2_4:
@@ -1156,6 +1171,12 @@ def _forward_densxc(density_base_kgm3: float, t_c: float, p_barg: float,
     # (siempre api_mpms_11_2_2m); tocar esa rama esta fuera del alcance de
     # esta ronda (el bug reportado y reproducido es exclusivo de
     # `conversion=0`, ver docstring del modulo, seccion RONDA 42).
+    # C-37 (2026-11-17): con referencia 15 C (Dens15C) el nucleo pasa la densidad
+    # CRUDA de entrada (*param_1) a FUN_1800e36e8, como dice el comentario de
+    # arriba; recalcularla via x_root daba 349.9999999998 para 350 kg/m3 y una
+    # bandera de rango de CPL que FX no marca.
+    if t_ref_c == T_REF_NGL_15C_C:
+        density_15c_kgm3 = density_base_kgm3
     if permitir_switch_1121m and density_15c_kgm3 >= MPMS_11_2_2M_RHO_RANGE[1]:
         cpl_res = api_mpms_11_2_1m(density_15c_kgm3, t_c, p_barg, evp_barg, rounding=round_11_2_2m)
     else:
@@ -1292,6 +1313,17 @@ def calcular_dens20c_ngl_lpg_puro(
         tabla_inversa=api_table59e, tabla_forward=api_table60e,
         round_11_2_4=round_11_2_4, round_11_2_2m=round_11_2_2m,
         permitir_switch_1121m_directo=True)
+
+
+# [C-35, 2026-11-16] F de SALIDA redondeado como la pantalla de FlowXpert (1/MPa, 6 decimales);
+# calculo interno intacto. Ver normas/_salida_pantalla_fx.py.
+import sys as _sys  # noqa: E402
+from . import _salida_pantalla_fx as _sfx  # noqa: E402
+_sfx.aplicar(_sys.modules[__name__], {
+    "calcular_rd60f_ngl_lpg_puro": {"compressibility_1_psi": ("1/psi", "1/MPa")},
+    "calcular_dens15c_ngl_lpg_puro": {"compressibility_1_bar": ("1/bar", "1/MPa")},
+    "calcular_dens20c_ngl_lpg_puro": {"compressibility_1_bar": ("1/bar", "1/MPa")},
+})
 
 
 if __name__ == "__main__":
