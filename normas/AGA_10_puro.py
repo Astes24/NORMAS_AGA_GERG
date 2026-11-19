@@ -105,6 +105,7 @@ QUE HACE ESTE MODULO (y de donde sale cada parte)
    (una sola evaluacion de AGA8-DETAIL, sin iteracion) -- copiadas tal cual
    de `AGA_10.py` (`_cstar_ideal`/`_cstar_real`), YA eran 100% Python puro
    ahi tambien. `critical_flow_factor` llama UNICAMENTE a
+   [C-42: ahora `normas/_aga10_crit_fx.py`, igual que AGA_10.py; texto historico:]
    `normas/_aga10_puro_python.py` (`calcular_critical_flow_factor_puro()`,
    el porte Newton-Raphson amortiguado del solver real `AGA10::crit`,
    validado 32/32=100% en el rango real de medicion de gas -- ver seccion
@@ -213,7 +214,7 @@ import math
 
 from .AGA_8 import (_composicion_a_x, DensityDetail, PropertiesDetail,
                      calcular_propiedades, NOMBRES_COMPONENTES, MM)
-from ._aga10_puro_python import calcular_critical_flow_factor_puro
+from . import _aga10_crit_fx as _a10c  # [C-42] port fiel de AGA10::crit (antes _aga10_puro_python)
 
 # ===========================================================================
 # Copiado tal cual de normas/AGA_10.py (ver seccion "DUPLICACION DELIBERADA"
@@ -434,8 +435,7 @@ def validar_rango_aga10(composicion: dict, T_K: float, P_kPa: float) -> dict:
     mensaje = f"Composicion: {clas_composicion}. T/P: {clas_pt}. Range combinado: {rango_combinado}."
     if not valido_entrada:
         mensaje += (" ADEMAS, T/P esta fuera del campo de entrada propio de AGA-10 "
-                    "(0..2000 bar(a), -200..+400 degC) -- la app real probablemente "
-                    "ni siquiera aceptaria esta entrada (Status='Input argument out of range').")
+                    "(0..2000 bar(a), -200..+400 degC): Status='Input argument out of range'.")
 
     return {
         "valido_entrada": valido_entrada,
@@ -524,11 +524,7 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
     Flowing_Density_kg_m3 = Df * Mm
 
     precision_h_s_cp_cv = (
-        "empirica (fast path, offset aditivo por componente), NO refinada -- "
-        "requiere binario (.xll o Unicorn) para el offset exacto via los "
-        "campos 37-42 del struct AGA10::crit. Este modulo, por diseno, nunca "
-        "ejecuta ese binario. Ver seccion 'DIFERENCIA DE PRECISION CONOCIDA' "
-        "en el docstring de normas/AGA_10_puro.py."
+        "empirica (fast path, offset aditivo por componente), NO refinada."
     )
 
     if calcular_flujo_critico:
@@ -539,21 +535,23 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         # [CERTAIN, 2026-08-31] Unico camino permitido para critical_flow_factor
         # en este modulo -- ver seccion "NIVEL DE CONFIANZA" del docstring.
         # Jamas se intenta .xll ni Unicorn, ni como fallback.
-        _res_puro = calcular_critical_flow_factor_puro(x, T_K, P_kPa)
+        # [C-42, 2026-11-18] Mismo solver que AGA_10.py (`_aga10_crit_fx`, port fiel de AGA10::crit): solo
+        # es "Calculation error" (NaN aqui) cuando CTherm::run falla (densidad <= 0), como FlowXpert; que
+        # HS_Mode no converja o se agoten las 99 vueltas no es error.
+        _res_puro = _a10c.critical_flow_factor(composicion, x, T_K, P_kPa)
         _cff = _res_puro["critical_flow_factor"]
-        if _res_puro["convergio"] and _cff == _cff:  # descarta NaN aunque 'convergio' fuera True
+        if not _res_puro["error"]:
             critical_flow_factor = _cff
-            metodo_critical_flow = "puro_python_newton"
+            metodo_critical_flow = "puro_python_aga10_crit"
             aviso_no_convergencia_critical_flow = None
         else:
             critical_flow_factor = float("nan")
-            metodo_critical_flow = "no_convergio"
+            metodo_critical_flow = "calculation_error"
             aviso_no_convergencia_critical_flow = (
-                "El solver Python puro del algoritmo real AGA10::crit "
-                "(normas/_aga10_puro_python.py) no convergio para esta "
-                "composicion/T/P. Por diseno, este modulo NUNCA recurre a "
-                ".xll ni a Unicorn como respaldo -- se devuelve NaN explicito "
-                "en vez de un numero fabricado. "
+                "Calculation error: en el calculo del Critical Flow Factor "
+                "(AGA-10) el estado de flujo o un estado intermedio no tiene "
+                "densidad valida (> 0) para esta composicion/T/P. Se devuelve "
+                "NaN explicito. "
                 f"rango_aga10.rango_combinado={rango_aga10['rango_combinado']!r}."
             )
     else:
@@ -563,22 +561,13 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         metodo_critical_flow = "no_solicitado"
         aviso_no_convergencia_critical_flow = None
 
-    # Mismo aviso de bug real de FlowXpert que AGA_10.py (Kappa>1.6, gas casi
-    # monoatomico) -- informativo, no depende de ningun binario.
-    aviso_bug_flowxpert_critical_flow = (
-        "Kappa > 1.6 (gas casi monoatomico, ej. Helio/Argon): FlowXpert tiene un bug real "
-        "confirmado que da un Critical Flow Factor sin sentido fisico (~87-89) en este rango. "
-        "critical_flow_factor replica ese bug tal cual (no es un valor confiable)."
-        if calcular_flujo_critico and prop_flujo["Kappa"] > 1.6 else None
-    )
+    # [C-42, 2026-11-18] Se quito el aviso propio de Kappa > 1.6 (FlowXpert no lo tiene; criterio falso).
 
     aviso_critical_flow_fuera_de_normal = (
         f"Composicion/T/P fuera de 'Normal' (rango_aga10.rango_combinado="
         f"{rango_aga10['rango_combinado']!r}). En esta zona el solver Python "
-        "puro puede no converger (NaN explicito) o, aunque converja, no hay "
-        "garantia de coincidir con el binario real -- ver seccion 'NIVEL DE "
-        "CONFIANZA' del docstring de normas/AGA_10_puro.py (32/32=100% en el "
-        "rango real de medicion de gas, cayendo fuera de el)."
+        "puede no converger (NaN explicito) o, aunque converja, el Critical "
+        "Flow Factor es menos confiable que en el rango Normal."
         if calcular_flujo_critico and rango_aga10["rango_combinado"] != "Normal" else None
     )
 
@@ -614,7 +603,6 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         "critical_flow_factor": critical_flow_factor,
         "isentropic_ideal_Cstar": isentropic_ideal_Cstar,
         "isentropic_real_Cstar": isentropic_real_Cstar,
-        "aviso_bug_flowxpert_critical_flow": aviso_bug_flowxpert_critical_flow,
         "aviso_critical_flow_fuera_de_normal": aviso_critical_flow_fuera_de_normal,
         "aviso_no_convergencia_critical_flow": aviso_no_convergencia_critical_flow,
         "precision_h_s_cp_cv": precision_h_s_cp_cv,

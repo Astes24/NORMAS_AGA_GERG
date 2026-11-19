@@ -44,10 +44,9 @@ usuario). Los mas usados:
 PASO 5 -- SIEMPRE revisar antes de un uso real/fiscal:
     resultado["rango_aga10"]["rango_combinado"]       # Normal/Extendido/Fuera de rango
     resultado["aviso_critical_flow_fuera_de_normal"]  # None si OK
-    resultado["aviso_bug_flowxpert_critical_flow"]    # None si OK (bug conocido Kappa>1.6)
-Si NINGUNO de los 3 caminos puede calcular Critical Flow, la funcion lanza
-`RuntimeError` explicito -- no hay un "plan B" aproximado que devuelva un
-numero silenciosamente.
+Si FlowXpert daria "Calculation error" en Critical Flow (densidad <= 0 en algun estado de
+AGA10::crit, [C-42]), la funcion lanza `RuntimeError` explicito -- no hay un "plan B" aproximado
+que devuelva un numero silenciosamente.
 
 ===============================================================================
 FUENTE Y NIVEL DE CONFIANZA (leer antes de usar en un entregable formal)
@@ -649,8 +648,7 @@ def validar_rango_aga10(composicion: dict, T_K: float, P_kPa: float) -> dict:
     mensaje = f"Composicion: {clas_composicion}. T/P: {clas_pt}. Range combinado: {rango_combinado}."
     if not valido_entrada:
         mensaje += (" ADEMAS, T/P esta fuera del campo de entrada propio de AGA-10 "
-                    "(0..2000 bar(a), -200..+400 degC) -- la app real probablemente "
-                    "ni siquiera aceptaria esta entrada (Status='Input argument out of range').")
+                    "(0..2000 bar(a), -200..+400 degC): Status='Input argument out of range'.")
 
     return {
         "valido_entrada": valido_entrada,
@@ -901,8 +899,7 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
 
     # [CERTAIN, 2026-08-31] "Range" real de fxAGA10ex_M -- ver
     # validar_rango_aga10() y la seccion nueva del docstring del modulo.
-    # Informativo, NO bloqueante (viaja siempre con el resultado, igual que
-    # aviso_bug_flowxpert_critical_flow).
+    # Informativo, NO bloqueante (viaja siempre con el resultado).
     rango_aga10 = validar_rango_aga10(composicion, T_K, P_kPa)
 
     Df, ierr_f, _ = DensityDetail(T_K, P_kPa, x)
@@ -1015,16 +1012,20 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         # Cp0, Cp y Cv por los del binario) y el respaldo al emulador Unicorn (sus archivos ya no estaban en el
         # proyecto). H0/H/S/Cp0/Cp/Cv quedan con el calculo propio de arriba (iguales a FlowXpert en el libro 01);
         # critical_flow_factor sale del port fiel de AGA10::crit + CTherm::HS_Mode (`_aga10_crit_fx.py`, mismas
-        # semillas, limites y criterios que FlowXpert). Si no converge se falla de forma explicita, sin formula
-        # aproximada de respaldo (decision del usuario 2026-08-04).
+        # semillas, limites y criterios que FlowXpert). Sin formula aproximada de respaldo (decision del usuario
+        # 2026-08-04).
+        # [C-42, 2026-11-18] Igual que AGA10::crit del binario: solo hay "Calculation error" cuando CTherm::run
+        # falla (densidad <= 0 en el estado de flujo o en un estado intermedio). Que HS_Mode no converja o que se
+        # agoten las 99 vueltas NO es error en FlowXpert: se devuelve el C* que el calcula (antes se lanzaba error,
+        # p. ej. composicion Default 400 K / 50000 kPa, donde FlowXpert da C* = 0.7145156).
         from . import _aga10_crit_fx as _a10c
         _res_puro = _a10c.critical_flow_factor(composicion, x, T_K, P_kPa)
         critical_flow_factor = _res_puro["critical_flow_factor"]
-        if not _res_puro["convergio"] or critical_flow_factor != critical_flow_factor:
+        if _res_puro["error"]:
             raise RuntimeError(
-                "Calculation error (igual que FlowXpert): el Critical Flow Factor de AGA10::crit no se puede "
+                "Calculation error: el Critical Flow Factor de AGA-10 no se puede "
                 f"calcular en estas condiciones (rango AGA-10: {rango_aga10['rango_combinado']!r}); el estado "
-                "intermedio no tiene una densidad fisica valida. No se usa formula aproximada de respaldo.")
+                "de flujo o un estado intermedio no tiene una densidad valida (> 0).")
         metodo_critical_flow = "puro_python_aga10_crit"
     else:
         critical_flow_factor = 0.0
@@ -1032,22 +1033,9 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         isentropic_real_Cstar = 0.0
         metodo_critical_flow = "no_solicitado"
 
-    # Bug REAL confirmado en FlowXpert (2026-07-30, contra el dispositivo
-    # real, ver normas/_aga10_emulador.py): Critical Flow Factor da un
-    # numero sin sentido fisico (~87-89 en vez de ~0.5-0.8) cuando el gas
-    # es casi puramente monoatomico (Kappa cercano a 5/3=1.6667). Este
-    # campo viaja SIEMPRE con el resultado (no solo en la GUI) para que
-    # cualquier consumidor de esta funcion (script, otra GUI, export a
-    # Excel) se entere del problema sin depender de que alguien lea un
-    # aviso visual. El umbral 1.6 es aproximado (confirmado roto desde
-    # kappa=1.6626, confirmado normal en kappa=1.50 -- no se determino el
-    # limite exacto entre esos dos puntos).
-    aviso_bug_flowxpert_critical_flow = (
-        "Kappa > 1.6 (gas casi monoatomico, ej. Helio/Argon): FlowXpert tiene un bug real "
-        "confirmado que da un Critical Flow Factor sin sentido fisico (~87-89) en este rango. "
-        "critical_flow_factor replica ese bug tal cual (no es un valor confiable)."
-        if calcular_flujo_critico and prop_flujo["Kappa"] > 1.6 else None
-    )
+    # [C-42, 2026-11-18] Se quito el aviso propio "aviso_bug_flowxpert_critical_flow" (Kappa > 1.6): FlowXpert
+    # no muestra ese aviso y el criterio era falso (con gas denso Kappa DETAIL > 1.6 y FlowXpert da un C*
+    # normal, p. ej. Default 400 K / 30000 kPa: Kappa 1.857, C* 0.71324).
 
     # [CERTAIN, 2026-08-31] Aviso de "solver caotico" para critical_flow_factor
     # fuera de "Normal" -- ver seccion "VALIDACION CONTRA APP REAL 2026-08-31"
@@ -1086,14 +1074,9 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
     aviso_critical_flow_fuera_de_normal = (
         f"Composicion/T/P fuera de 'Normal' (rango_aga10.rango_combinado="
         f"{rango_aga10['rango_combinado']!r}). Z_flujo/Kappa/W/H/S/Cp/Cv "
-        "siguen siendo confiables (validado <0.0001% contra la app real vía "
-        "Frida en 12 casos extremos, 2026-08-31), pero critical_flow_factor "
-        "(Critical Flow C*) puede diverger de la app real hasta ~35% en esta "
-        "zona (2 de los 12 casos probados) por mal condicionamiento numerico "
-        "real del solver iterativo -- no es un bug de este software, es el "
-        "mismo comportamiento caotico que tiene FlowXpert mismo aqui. Ver "
-        "'VALIDACION CONTRA APP REAL 2026-08-31' y su 'CORRECCION 2026-08-31' "
-        "en normas/_aga10_xll_directo.py."
+        "siguen siendo confiables, pero critical_flow_factor (Critical Flow "
+        "C*) es sensible en esta zona por el mal condicionamiento numerico "
+        "del metodo iterativo de AGA-10: usarlo con precaucion."
         if calcular_flujo_critico and rango_aga10["rango_combinado"] != "Normal" else None
     )
 
@@ -1136,7 +1119,6 @@ def calcular_velocidad_sonido_y_fpv(composicion: dict, T_K: float, P_kPa: float,
         "critical_flow_factor": critical_flow_factor,
         "isentropic_ideal_Cstar": isentropic_ideal_Cstar,
         "isentropic_real_Cstar": isentropic_real_Cstar,
-        "aviso_bug_flowxpert_critical_flow": aviso_bug_flowxpert_critical_flow,
         "aviso_critical_flow_fuera_de_normal": aviso_critical_flow_fuera_de_normal,
         "metodo_critical_flow": metodo_critical_flow,
         "ierr_flujo": ierr_f,
