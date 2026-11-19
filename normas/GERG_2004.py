@@ -216,6 +216,12 @@ def _cargar_motor_gerg2004():
     return mod
 
 
+# [C-43, 2026-11-18] La seleccion de raiz de densidad (DensidadFX: semillas Peng-Robinson como FlowXpert) llega aqui
+# por la misma carga del codigo de GERG_2008.py. Contra el emulador de la ruta GERG-2004 (GERG::GERG_Calculate,
+# bandera 0x1e) en 240 estados densos: antes 13 de 233 con raiz equivocada o error, despues 0 (todos <= 2.2e-5,
+# diferencia propia de la tabla 2004). [Certain] Quedan 7 estados en los que la ruta 2004 de FX devuelve error
+# (rc 3) y este motor da la raiz de la ruta 2008: la ruta 2004 usa otro algoritmo (CEquation::ZOTPX/FindDensities,
+# sin BracketDensities) que no se porto. Ej.: CO2 250 K 3000 kPa, propano 250 K 1000 kPa.
 _motor = _cargar_motor_gerg2004()
 calcular_propiedades = _motor.calcular_propiedades
 calcular_flash = _motor.calcular_flash

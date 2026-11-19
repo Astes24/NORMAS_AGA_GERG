@@ -530,6 +530,15 @@ class _EstadoGERG:
 _estado = _EstadoGERG()
 
 
+def _exp_c(v):
+    """exp con semantica IEEE de C (inf en desborde, sin excepcion) [C-43]: FlowXpert evalua la EOS en densidades
+    extrapoladas absurdas (p. ej. negativas) dentro de FindDensity y sigue iterando con el resultado."""
+    try:
+        return math.exp(v)
+    except OverflowError:
+        return float("inf")
+
+
 def AlpharGERG(iprop, T, D, x):
     """Derivadas de la energia de Helmholtz residual adimensional (ar=a/RT)
     respecto a tau y delta. Devuelve dict con claves (0,0)..(2,0)."""
@@ -543,10 +552,10 @@ def AlpharGERG(iprop, T, D, x):
     delp = [None] * 8
     Expd = [None] * 8
     delp[1] = del_
-    Expd[1] = math.exp(-delp[1])
+    Expd[1] = _exp_c(-delp[1])
     for i in range(2, 8):
         delp[i] = delp[i - 1] * del_
-        Expd[i] = math.exp(-delp[i])
+        Expd[i] = _exp_c(-delp[i])
 
     _estado.actualizar(T, Tr, x)
     taup = _estado.taup
@@ -628,7 +637,7 @@ def AlpharGERG(iprop, T, D, x):
                             cij0 = c_mnk * delp[2]
                             eij0 = e_mnk * del_
                             ndt = (xijf * n_mnk * delp[int(d_mnk)] *
-                                   math.exp(cij0 + eij0 + g_mnk + t_mnk * lntau))
+                                   _exp_c(cij0 + eij0 + g_mnk + t_mnk * lntau))
                             ex = d_mnk + 2.0 * cij0 + eij0
                             ex2 = ex * ex - d_mnk + 2.0 * cij0
                             ar[(0, 1)] += ndt * ex
@@ -745,6 +754,384 @@ def PropertiesGERG(T, D, x):
     }
 
 
+# =============================================================================
+# [C-43, 2026-11-18] Seleccion de la raiz de densidad igual que FlowXpert
+# =============================================================================
+# [Certain, desensamblado de libFXLibrary.so + decompilacion Ghidra de GERG2008::CEquation::TERMO/CalcDensity/
+# BracketDensities/FindDensity/FindFirstRoot/CalculateDensity y GERG2008::SolvePengRobinsonEOS/SolveCubicEquation/
+# CMixture::CalcXaXb/Init] FlowXpert no usa Newton desde gas ideal: resuelve Peng-Robinson para obtener densidades
+# semilla, acota la raiz GERG alrededor de la semilla (dP/dD >= 0) y la refina (regula falsi). Las pantallas "Gas"
+# (GERG-2008 Gas, GERG-2004 Gas, AGA8 GERG) piden fase 1 (vapor: con 2-3 raices PR usa la semilla de menor densidad);
+# el flash, para la alimentacion monofasica, pide fase 0 (la de menor energia de Gibbs entre vapor y liquido).
+# Antes (DensityGERG desde gas ideal) daba la raiz equivocada o ierr=1 en 17 de 240 estados densos; este port
+# coincide con FX (emulador Unicorn) en ese barrido. Unidades internas como en FX: MPa, mol/dm3, R = 0.008314472.
+# Datos PR del binario (CData::s_TKRIT [K], s_PKRIT [MPa], s_AZT) y kij (CData::s_XKIJ), en el orden de este modulo.
+_PR_TC_PC_W = {
+    1: (190.56, 4.599, 0.011), 2: (126.2, 3.398, 0.037), 3: (304.12, 7.374, 0.225), 4: (305.32, 4.872, 0.099),
+    5: (369.83, 4.248, 0.152), 6: (407.85, 3.64, 0.186), 7: (425.12, 3.796, 0.2), 8: (460.39, 3.381, 0.229),
+    9: (469.7, 3.37, 0.252), 10: (507.6, 3.025, 0.3), 11: (540.2, 2.74, 0.35), 12: (568.7, 2.49, 0.399),
+    13: (594.6, 2.29, 0.445), 14: (617.7, 2.11, 0.49), 15: (33.25, 1.297, -0.216), 16: (154.58, 5.043, 0.025),
+    17: (132.85, 3.494, 0.045), 18: (647.14, 22.064, 0.344), 19: (373.4, 8.963, 0.09), 20: (5.19, 0.227, -0.39),
+    21: (150.86, 4.898, -0.002),
+}
+_PR_KIJ = {
+    (1, 2): 0.0311, (1, 3): 0.0919, (1, 4): -0.0026, (1, 5): 0.014, (1, 6): 0.0256, (1, 7): 0.0133,
+    (1, 8): -0.0056, (1, 9): 0.023, (1, 10): 0.0422, (1, 11): 0.0352, (1, 12): 0.0496, (1, 13): 0.0474,
+    (1, 14): 0.0422, (1, 15): 0.0156, (1, 17): 0.03, (1, 21): 0.023, (2, 3): -0.017, (2, 4): 0.0515,
+    (2, 5): 0.0852, (2, 6): 0.1033, (2, 7): 0.08, (2, 8): 0.0922, (2, 9): 0.1, (2, 10): 0.1496,
+    (2, 11): 0.1441, (2, 15): 0.103, (2, 16): -0.0119, (2, 17): 0.0307, (2, 19): 0.1767, (2, 21): -0.0026,
+    (3, 4): 0.1322, (3, 5): 0.1241, (3, 6): 0.12, (3, 7): 0.1333, (3, 8): 0.1219, (3, 9): 0.1222,
+    (3, 10): 0.11, (3, 11): 0.1, (3, 14): 0.1141, (3, 15): -0.1622, (3, 18): 0.12, (3, 19): 0.0974,
+    (4, 5): 0.0011, (4, 6): -0.0067, (4, 7): 0.0096, (4, 9): 0.0078, (4, 10): -0.01, (4, 11): 0.0067,
+    (4, 12): 0.0185, (4, 14): 0.0144, (4, 15): -0.0667, (4, 17): -0.0226, (4, 19): 0.0833, (5, 6): -0.0078,
+    (5, 7): 0.0033, (5, 8): 0.0111, (5, 9): 0.0267, (5, 10): 0.0007, (5, 11): 0.0056, (5, 15): -0.0833,
+    (5, 17): 0.0259, (5, 19): 0.0878, (6, 7): -0.0004, (6, 19): 0.0474, (7, 9): 0.0174, (7, 10): -0.0056,
+    (7, 11): 0.0033, (7, 14): 0.0078, (7, 15): -0.397, (8, 9): 0.06, (9, 11): 0.0074, (9, 19): 0.063,
+    (10, 11): -0.0078, (10, 15): -0.03, (11, 15): -0.1167, (15, 17): 0.0919, (16, 21): 0.0104, (17, 19): 0.0544,
+    (18, 19): 0.04,
+}
+_R_FX = 0.008314472  # MPa dm3/(mol K)
+FASE_FX_ESTABLE, FASE_FX_VAPOR, FASE_FX_LIQUIDO = 0, 1, 2
+
+
+class _SinRaizFX(Exception):
+    pass
+
+
+def _pr_mezcla(T, x):
+    """(a, b) de Peng-Robinson de la mezcla (CMixture::CalcXaXb + Init): solo componentes con x > 1e-10,
+    fracciones normalizadas."""
+    comp = [i for i in range(1, 22) if x[i] > 1e-10]
+    s = sum(x[i] for i in comp)
+    ai, bi = {}, {}
+    for i in comp:
+        tc, pc, w = _PR_TC_PC_W[i]
+        m = 0.37464 + 1.54226 * w - w * (0.26992 * w)
+        alfa = (1.0 + m * (1.0 - math.sqrt(T / tc))) ** 2
+        ai[i] = alfa * (3.160920450663759e-05 * tc * tc / pc)
+        bi[i] = 0.0006468659215999999 * tc / pc
+    a = b = 0.0
+    for i in comp:
+        xi = x[i] / s
+        for j in comp:
+            k = _PR_KIJ.get((i, j) if i < j else (j, i), 0.0) if i != j else 0.0
+            a += math.sqrt(ai[j] * ai[i]) * (1.0 - k) * (x[j] / s) * xi
+        b += bi[i] * xi
+    return a, b
+
+
+def _cubica_fx(p1, p2, p3):
+    """GERG2008::SolveCubicEquation: raices reales de z^3 + p1 z^2 + p2 z + p3 = 0 (1, 2 o 3)."""
+    q = (3.0 * p2 - p1 * p1) / 9.0
+    r = ((p2 * 9.0 * p1 - 27.0 * p3) - (p1 + p1) * p1 * p1) / 54.0
+    disc = q * q * q + r * r
+    if disc >= 0.0:
+        sq = math.sqrt(disc)
+        s = r + sq
+        s = -math.pow(-s, 1.0 / 3.0) if s < 0.0 else math.pow(s, 1.0 / 3.0)
+        t = r - sq
+        t = -math.pow(-t, 1.0 / 3.0) if t < 0.0 else math.pow(t, 1.0 / 3.0)
+        z0 = (s + t) - p1 / 3.0
+        if abs(s - t) < 1e-20:
+            z1 = (s + t) * -0.5 - p1 / 3.0
+            return [z0, z1] if abs(z1 - z0) >= 1e-20 else [z0]
+        return [z0]
+    th = math.acos(r / math.sqrt(q * -q * q))
+    dos = 2.0 * math.sqrt(-q)
+    return [math.cos(th / 3.0) * dos - p1 / 3.0, math.cos((th + 6.283185307179586) / 3.0) * dos - p1 / 3.0,
+            math.cos((th + 12.566370614359172) / 3.0) * dos - p1 / 3.0]
+
+
+def _semillas_pr(T, P, x):
+    """GERG2008::SolvePengRobinsonEOS -> (ok, [rho_max, rho_min], n_raices (0, 1 o 2), b)."""
+    if T < 1e-6 or P < 1e-6:
+        return False, None, 0, 0.0
+    a, b = _pr_mezcla(T, x)
+    rt = _R_FX * T
+    A = a * P / (rt * rt)
+    B = P * b / rt
+    zs = _cubica_fx(B - 1.0, (A - 3.0 * B * B) - (B + B), (B * B * B + B * B) - A * B)
+    validas = []
+    for z in zs:
+        rho = P / (z * rt) if z != 0.0 else -1.0
+        if 0.0 < rho < 1.0 / b:
+            validas.append(rho)
+    if not validas:
+        return True, [0.0, 1e100], 0, b
+    return True, [max(validas), min(validas)], min(len(validas), 2), b
+
+
+def _p_fx(T, D, x):
+    """CEquation::PB en MPa. Fuera de rango (densidad extrapolada absurda) el C de FX da inf/NaN sin excepcion;
+    aqui se devuelve NaN para que las comparaciones sigan la misma rama (todas falsas)."""
+    try:
+        return PressureGERG(T, D, x)[0] / 1000.0
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return float("nan")
+
+
+def _dpdd_fx(T, D, x):
+    """CEquation::DPDDB: (P [MPa], dP/dD [MPa dm3/mol])."""
+    try:
+        p, _z, dpdd = PressureGERG(T, D, x)
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return float("nan"), float("nan")
+    return p / 1000.0, dpdd / 1000.0
+
+
+def _acotar_fx(T, P, x, rho, vapor, una_raiz):
+    """CEquation::BracketDensities -> (ok, lo, hi)."""
+    if P < 1e-5:
+        return True, 0.95 * rho, 1.05 * rho
+    if vapor:
+        f_lo, mult, f_hi = 0.95, 0.9900990099009901, 1.05
+    else:
+        f_lo, mult, f_hi = 0.88, 1.01, 1.08
+    r = rho
+    for it in range(51):
+        p_r, d_r = _dpdd_fx(T, r, x)
+        if d_r >= 0.0:
+            lo, hi = f_lo * r, f_hi * r
+            if it != 0:
+                if vapor:
+                    hi = r
+                else:
+                    lo = r
+            break
+        r *= mult
+    else:
+        return False, 0.0, 0.0
+    n = 51
+    while True:
+        p_lo, d_lo = _dpdd_fx(T, lo, x)
+        if d_lo >= 0.0:
+            if r < lo:
+                p_lo, lo = p_r, r
+            break
+        n -= 1
+        lo *= 1.01
+        if n == 0:
+            return False, 0.0, 0.0
+    n = 51
+    while True:
+        p_hi, d_hi = _dpdd_fx(T, hi, x)
+        if d_hi >= 0.0:
+            break
+        n -= 1
+        hi /= 1.01
+        if n == 0:
+            return False, 0.0, 0.0
+    if hi < r:
+        p_hi, hi = p_r, r
+        intercambiar = r < lo
+    else:
+        intercambiar = hi < lo
+    if intercambiar:
+        lo, hi, p_lo, p_hi, d_lo, d_hi = hi, lo, p_hi, p_lo, d_hi, d_lo
+    pend = (p_hi - p_lo) / (hi - lo)
+    if (d_lo < pend < d_hi) or (pend < d_lo and d_hi < pend) or una_raiz:
+        if p_lo < P < p_r:
+            hi = r
+        if p_r < P < p_hi:
+            lo = r
+    return True, lo, hi
+
+
+def _refinar_fx(T, P, x, x1, x2, tol=1e-7):
+    """CEquation::FindDensity (regula falsi con extrapolacion acotada, 40 pasos) -> (ok, D)."""
+    f1 = _p_fx(T, x1, x) - P
+    f2 = _p_fx(T, x2, x) - P
+    if (f1 - f2) * (x1 - x2) < 0.0:
+        return False, 0.0
+    sal = x1  # [C-43] FX deja la salida en 0 si converge sin iterar; aqui se devuelve x1 (raiz exacta)
+    for _ in range(40):
+        if abs(x1 - x2) <= 1e-10 or abs(f1) <= 1e-10:
+            return True, sal
+        x3 = (x2 - x1) * f1 / (f1 - f2) + x1
+        if x3 < 0.0:
+            x3 = (x1 + x2) * 0.5
+        sal = x3
+        dx = x3 - x1
+        if abs(x3) >= 1e-8:
+            dx = dx / x3
+        if abs(dx) < tol:
+            return True, sal
+        f3 = _p_fx(T, x3, x) - P
+        a = f1 * f3
+        bb = f2 * f3
+        medio = 0.5 * (x2 - x1) + x1
+        if a < 0.0 and bb < 0.0:
+            a, bb = -a, -bb
+        if bb <= a:
+            x1n, x2n, f2n = x3, x2, f2
+        else:
+            x1n, x2n, f2n = x3, x1, f1
+        x1, x2, f2, f1 = x1n, x2n, f2n, f3
+        if (medio - x1) * (medio - x2) <= 0.0:
+            r = abs(f3 / f2)
+            if r < 0.3:
+                xn = r * 1.5 * (x2 - x1) + x1
+                usar_medio = None
+            elif r > 3.0:
+                xn = x2 - r * 1.5 * (x2 - x1)
+                usar_medio = None
+            else:
+                xn = (x1 + x2) * 0.5
+                usar_medio = True
+            sal = xn
+            fn = _p_fx(T, xn, x) - P
+            prod = f3 * fn
+            if usar_medio is None and prod > 0.0:
+                xn = (x1 + x2) * 0.5
+                sal = xn
+                fn = _p_fx(T, xn, x) - P
+                prod = f3 * fn
+            if fn * f2 <= prod:
+                x2n, f2n = x2, f2
+            else:
+                x2n, f2n = x1, f3
+            x1, x2, f2, f1 = xn, x2n, f2n, fn
+    return False, 0.0
+
+
+def _primera_raiz_fx(f, a, b, n):
+    """CEquation::FindFirstRoot: barrido de a hacia b en n pasos hasta el primer cambio de signo de f y
+    refinamiento biseccion + regula falsi (tolerancia 1e-7). -> (ok, raiz)."""
+    paso = (b - a) / float(n)
+    medio_paso = abs(0.5 * paso)
+    xi = a
+    f_ant = f(a)
+    while True:
+        xi = xi + paso
+        if abs(xi - b) < medio_paso:
+            xi = b - 1e-8
+        if (b - xi) * (b - a) < 0.0:
+            return False, 0.0
+        f_act = f(xi)
+        prod = f_ant * f_act
+        if prod < 0.0:
+            break
+        f_ant = f_act
+        if abs(prod) > 1.7976931348623157e+308:
+            return False, 0.0
+    # refinamiento (variables como en la decompilacion: [x9 (f8) ... x18 (f50)], x28 = ultimo punto)
+    x9, f8, x18, f50, x28 = a, f_ant, xi, f_act, xi
+    for _ in range(1000):  # FX no tiene limite; aqui se corta para no colgar
+        xm = (x18 + x9) * 0.5
+        fm = f(xm)
+        if f8 * fm <= 0.0:
+            x5, f7, f50, x18 = x9, f8, fm, xm
+        else:
+            x5, f7 = xm, fm
+        xn = (x18 - x5) * f7 / (f7 - f50) + x5
+        if (abs(xn) > 1e-8 and abs((xn - x28) / xn) < 1e-7) or abs(xn - x28) < 1e-7:
+            return True, xn
+        fn = f(xn)
+        x28 = xn
+        if f7 * fn <= 0.0:
+            f8, x9, f50, x18 = f7, x5, fn, xn
+        else:
+            f8, x9 = fn, xn
+    return False, 0.0
+
+
+def _gibbs_residual_fx(T, D, x):
+    """CEquation::GRTPB: g_res = R T (ar + Z - 1 - ln Z) (misma escala relativa que FX)."""
+    ar = AlpharGERG(1, T, D, x)
+    d = ar[(0, 1)]
+    return (ar[(0, 0)] + d - math.log(d + 1.0)) * _R_FX * T * 1000.0
+
+
+def _calc_density_fx(T, P, x, fase, semillas, n_raices):
+    """CEquation::CalcDensity -> (D, fase_encontrada) o None."""
+    if n_raices not in (1, 2, 3):
+        return None
+    una = n_raices == 1
+    nula = lambda D: _p_fx(T, D, x) - P  # noqa: E731
+
+    def buscar(rho, vapor):
+        ok, lo, hi = _acotar_fx(T, P, x, rho, vapor, una)
+        if not ok:
+            return None, 0.0
+        ok, D = _refinar_fx(T, P, x, lo, hi)
+        if ok:
+            return True, D
+        ok, D = _primera_raiz_fx(nula, hi, lo, 50) if vapor else _primera_raiz_fx(nula, lo, hi, 50)
+        return ok, (D if ok else 0.0)
+
+    if una or fase in (FASE_FX_ESTABLE, FASE_FX_LIQUIDO):
+        ok_l, d_l = buscar(semillas[0], False)
+        ok_l = bool(ok_l) and d_l >= 0.0
+        if una or fase == FASE_FX_LIQUIDO:
+            return (d_l, FASE_FX_LIQUIDO) if ok_l else None
+        ok_v, d_v = buscar(semillas[1], True)
+        if ok_v is None or d_v < 0.0:
+            return (d_l, FASE_FX_LIQUIDO) if ok_l else None
+        if ok_v and ok_l:
+            g_l = _gibbs_residual_fx(T, d_l, x)
+            g_v = _gibbs_residual_fx(T, d_v, x)
+            if (g_l - g_v) / (_R_FX * T * 1000.0) >= 0.0:
+                return d_v, FASE_FX_VAPOR
+            return d_l, FASE_FX_LIQUIDO
+        if ok_l:
+            return d_l, FASE_FX_LIQUIDO
+        if ok_v:
+            return d_v, FASE_FX_VAPOR
+        return None
+    if fase == FASE_FX_VAPOR:
+        ok_v, d_v = buscar(semillas[1], True)
+        if ok_v and d_v >= 0.0:
+            return d_v, FASE_FX_VAPOR
+        return None
+    return None
+
+
+def _calculate_density_fx(T, P, x, b):
+    """CEquation::CalculateDensity (respaldo por barrido). Devuelve D o None (FX devuelve 0)."""
+    dmin, dmax = 1e-5, 0.99 / b
+    n = int(10.0 / b)
+    nula = lambda D: _p_fx(T, D, x) - P  # noqa: E731
+    deriv = lambda D: _dpdd_fx(T, D, x)[1]  # noqa: E731
+    ok, d_sv = _primera_raiz_fx(deriv, dmin, dmax, n)
+    if ok:
+        if _p_fx(T, d_sv, x) < P:
+            ok2, D = _primera_raiz_fx(nula, dmax, dmin, n)
+            if ok2:
+                return D
+        else:
+            return None
+    ok, d_sl = _primera_raiz_fx(deriv, dmax, dmin, n)
+    if ok:
+        if P < _p_fx(T, d_sl, x):
+            ok2, D = _primera_raiz_fx(nula, dmin, dmax, n)
+            if ok2:
+                return D
+        else:
+            return None
+    ok, D = _primera_raiz_fx(nula, dmin, dmax, n)
+    return D if ok else None
+
+
+def DensidadFX(T, P_kPa, x, fase=FASE_FX_VAPOR):
+    """Densidad [mol/l] como GERG2008::CEquation::TERMO de FlowXpert (semillas Peng-Robinson + CalcDensity con la
+    fase pedida + CalculateDensity de respaldo). Devuelve None si FX no obtendria una densidad valida."""
+    P = P_kPa / 1000.0
+    try:
+        ok, semillas, n, b = _semillas_pr(T, P, x)
+        if not ok:
+            return None
+        r = _calc_density_fx(T, P, x, fase, semillas, n)
+        if r is not None:
+            D = r[0]
+        else:
+            D = _calculate_density_fx(T, P, x, b)
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
+    if D is None or not (D > 0.0) or D != D:
+        return None
+    return D
+
+
 # [CERTAIN, 2026-08-04] Por debajo de este umbral, `GERG::GERG_Calculate`
 # REAL (el mismo usado por las 4 pantallas GERG-2004/2008 Gas/Flash de
 # FlowXpert, offset 0xcb860, llamado directo confirmado hoy con la receta
@@ -768,11 +1155,9 @@ def _aviso_baja_presion(P_kPa: float):
     if P_kPa < PRESION_MINIMA_CONFIABLE_KPA:
         return (
             f"P={P_kPa:.3f} kPa esta por debajo de {PRESION_MINIMA_CONFIABLE_KPA:.0f} kPa "
-            "(0.5 MPa) -- rango donde el calculo REAL de GERG-2004/2008 dentro de "
-            "FlowXpert es erratico (confirmado: 48% de fallo en 570 composiciones "
-            "reales a presion atmosferica). Este resultado esta validado contra la "
-            "fuente publica de NIST (GERG2008.FOR), NO contra FlowXpert, que en este "
-            "rango no produce un numero confiable con el que comparar."
+            "(0.5 MPa): a presion cercana a la atmosferica la busqueda de densidad "
+            "de GERG-2004/2008 es menos robusta. El resultado sigue la formulacion "
+            "publica de NIST (GERG2008.FOR); revisarlo con precaucion."
         )
     return None
 
@@ -780,6 +1165,18 @@ def _aviso_baja_presion(P_kPa: float):
 def calcular_propiedades(composicion: dict, T_K: float, P_kPa: float):
     """Punto de entrada de alto nivel: composicion por nombre + T,P -> propiedades."""
     x = _composicion_a_x(composicion)
+    # [C-43] Raiz como FlowXpert (semillas Peng-Robinson, fase vapor pedida por las pantallas Gas). FX reporta
+    # Z = P / (D R T) con la P de entrada (TERMO), aunque FindDensity corte por paso antes de cerrar la presion.
+    D_fx = DensidadFX(T_K, P_kPa, x, FASE_FX_VAPOR)
+    if D_fx is not None:
+        resultado = PropertiesGERG(T_K, D_fx, x)
+        resultado["Z"] = P_kPa / (D_fx * R_GERG * T_K)
+        resultado["D_mol_l"] = D_fx
+        resultado["ierr"] = 0
+        resultado["msg_error"] = ""
+        resultado["aviso_baja_presion"] = _aviso_baja_presion(P_kPa)
+        return resultado
+    # Respaldo (FX no obtendria densidad valida): metodo anterior a C-43.
     D, ierr, msg = DensityGERG(T_K, P_kPa, x)
     if ierr:
         # [CERTAIN, 2026-10-05, captura real libro 01 caso 11] CO2 puro supercritico (308.15 K / 9600 kPa): el
@@ -792,7 +1189,7 @@ def calcular_propiedades(composicion: dict, T_K: float, P_kPa: float):
     resultado["D_mol_l"] = D
     resultado["ierr"] = ierr
     resultado["msg_error"] = msg
-    resultado["aviso_baja_presion_flowxpert"] = _aviso_baja_presion(P_kPa)
+    resultado["aviso_baja_presion"] = _aviso_baja_presion(P_kPa)
     return resultado
 
 
@@ -887,12 +1284,12 @@ def _resultado_flash_monofasico(D, Mm, props, vf_final, iteraciones, ierr, msg,
         "ierr": ierr,
         "msg_error": msg,
         "solucion_trivial": False,
-        "aviso_baja_presion_flowxpert": _aviso_baja_presion(P_kPa),
+        "aviso_baja_presion": _aviso_baja_presion(P_kPa),
     }
 
 
 def calcular_flash(composicion: dict, T_K: float, P_kPa: float,
-                    duplicar_fase_ausente: bool = False):
+                    duplicar_fase_ausente: bool = False, vf_regla_fx: bool = False):
     """Propiedades de la mezcla como UNA SOLA fase homogenea (Vapour
     Fraction siempre 0.0 o 1.0), en el mismo formato de dict que antes
     devolvia el flash de 2 fases real.
@@ -989,6 +1386,35 @@ def calcular_flash(composicion: dict, T_K: float, P_kPa: float,
     correcto) y contra el nuevo caso (CO2 puro, 100 bar(a)/25 degC,
     D=18.577 mol/l > Dcx=10.625 mol/l -> liquido, correcto)."""
     z = _composicion_a_x(composicion)
+    res = _calcular_flash_monofasico_previo(z, T_K, P_kPa, duplicar_fase_ausente)
+    # [C-43] Densidad de la alimentacion como el primer TERMO de CEquation::CalculateFlash de FlowXpert (fase 0:
+    # la de menor energia de Gibbs entre las raices sembradas con Peng-Robinson). La fraccion de vapor se sigue
+    # clasificando como antes; solo si la raiz cambia se clasifica contra la densidad pseudocritica.
+    D_fx = DensidadFX(T_K, P_kPa, z, FASE_FX_ESTABLE)
+    if D_fx is None:
+        return res
+    D_prev = res["D_total_mol_l"]
+    if vf_regla_fx:
+        # [C-43, GERG-2008 Flash] Fase como TERMO de FX: liquido si el volumen molar 1/D <= 3 b (b de Peng-Robinson
+        # de la mezcla), vapor si no. Confirmado contra el emulador en 240 estados densos (propano/etano/n-butano
+        # liquidos: VF 0; C1/C2 50/50 supercritico 290 K 10000 kPa y 330 K 15000 kPa: VF 1), donde la regla anterior
+        # (D vs densidad pseudocritica / raiz de arranque) fallaba.
+        _a_pr, b_pr = _pr_mezcla(T_K, z)
+        vf_final = 0.0 if 1.0 / D_fx <= 3.0 * b_pr else 1.0
+    elif res["ierr"] == 0 and abs(D_fx - D_prev) <= 1e-6 * max(D_prev, 1e-12):
+        vf_final = res["vapor_fraction"]
+    else:
+        _Tcx, Dcx = PseudoCriticalPointGERG(z)
+        vf_final = 0.0 if D_fx >= Dcx else 1.0
+    props = PropertiesGERG(T_K, D_fx, z)
+    props["Z"] = P_kPa / (D_fx * R_GERG * T_K)
+    return _resultado_flash_monofasico(D_fx, MolarMassGERG(z), props, vf_final, 0, 0, "",
+                                        duplicar_fase_ausente, P_kPa)
+
+
+def _calcular_flash_monofasico_previo(z, T_K, P_kPa, duplicar_fase_ausente):
+    """Seleccion de raiz anterior a C-43 (Newton desde gas y desde liquido, menor Gibbs). Se conserva como
+    respaldo y para mantener la clasificacion de fase de los casos ya validados."""
     Mm = MolarMassGERG(z)
 
     D_vapor, ierr_v, msg_v = DensityGERG(T_K, P_kPa, z, iFlag=0)
@@ -1198,11 +1624,26 @@ def _es_estable(T, P, z):
 
 
 def _flash_bifasico(z, T, P, P_kPa):
+    """[C-43] Si la iteracion desborda (OverflowError/ValueError en exp/log, p. ej. liquido comprimido C1/C3 50/50 a
+    240 K y >= 7000 kPa) devuelve None: el que llama usa la rama monofasica, que es lo que entrega FlowXpert (VF = 0,
+    liquido). Si no converge en 500 vueltas devuelve ierr = 1 sin valores, como FX cuando SOLMIN agota sus 20 pasos
+    (GERG_Calculate devuelve 3 y la pantalla muestra error)."""
+    try:
+        return _flash_bifasico_iterar(z, T, P, P_kPa)
+    except (OverflowError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _flash_bifasico_iterar(z, T, P, P_kPa):
     K = _k_wilson(T, P)
+    convergido = False
     b, x, y = 1.0, z, z
     Dl = Dv = Zl = Zv = 0.0
+    fuera = 0  # vueltas con Rachford-Rice fuera de (0, 1): iteracion degenerada hacia una sola fase
     for it in range(500):
         b = _rachford_rice(z, K)
+        if not (0.0 < b < 1.0):
+            fuera += 1
         x = [None] + [z[i] / (1 + b * (K[i] - 1)) if z[i] > 0 else 0.0 for i in range(1, 22)]
         y = [None] + [K[i] * x[i] for i in range(1, 22)]
         sx, sy = sum(x[1:]), sum(y[1:])
@@ -1219,9 +1660,19 @@ def _flash_bifasico(z, T, P, P_kPa):
         err = max(abs(math.log(Kn[i]) - math.log(K[i])) for i in range(1, 22) if z[i] > 0)
         K = Kn
         if err < 1e-7:
+            convergido = True
             break
     if not (0.0 < b < 1.0):
         return None
+    if not convergido and (fuera > 0 or max(abs(math.log(K[i])) for i in range(1, 22) if z[i] > 0) > 50.0):
+        # [C-43] La sustitucion no convergio porque degenero (RR pegado en 0/1, K divergentes: C3/C1 90/10 270 K
+        # 6000 y 10000 kPa, 70/30 250 K 15000 kPa). Antes se devolvia la ultima vuelta (VF ~0.88, Z falso); FX da
+        # una sola fase liquida, que es lo que entrega la rama monofasica.
+        return None
+    if not convergido:
+        return {"vapor_fraction": float("nan"), "iteraciones": it + 1, "ierr": 1,
+                "msg_error": "Calculation error: el flash GERG-2008 no convergio en 500 iteraciones.",
+                "solucion_trivial": False, "aviso_baja_presion": _aviso_baja_presion(P_kPa)}
     Mv, Ml, Mt = MolarMassGERG(y), MolarMassGERG(x), MolarMassGERG(z)
     Dt = 1.0 / (b / Dv + (1.0 - b) / Dl)
     return {
@@ -1230,7 +1681,7 @@ def _flash_bifasico(z, T, P, P_kPa):
         "D_vapor_mol_l": Dv, "D_liquido_mol_l": Dl, "D_total_mol_l": Dt,
         "D_vapor_kg_m3": Dv * Mv, "D_liquido_kg_m3": Dl * Ml, "D_total_kg_m3": Dt * Mt,
         "iteraciones": it + 1, "ierr": 0, "msg_error": "", "solucion_trivial": False,
-        "aviso_baja_presion_flowxpert": _aviso_baja_presion(P_kPa),
+        "aviso_baja_presion": _aviso_baja_presion(P_kPa),
         "composicion_vapor": y, "composicion_liquido": x,
     }
 
@@ -1245,12 +1696,15 @@ def calcular_flash_gerg2008(composicion: dict, T_K: float, P_kPa: float):
     pantalla 'GERG-2004 Flash' donde el numero bajo la etiqueta 'kg/m3' es
     en realidad la densidad molar)."""
     z = _composicion_a_x(composicion)
-    estable, _tpd = _es_estable(T_K, P_kPa, z)
+    try:
+        estable, _tpd = _es_estable(T_K, P_kPa, z)
+    except (OverflowError, ValueError, ZeroDivisionError):  # [C-43] mismo criterio que _flash_bifasico
+        estable = True
     if not estable:
         res = _flash_bifasico(z, T_K, P_kPa, P_kPa)
         if res is not None:
             return res
-    return calcular_flash(composicion, T_K, P_kPa, duplicar_fase_ausente=True)
+    return calcular_flash(composicion, T_K, P_kPa, duplicar_fase_ausente=True, vf_regla_fx=True)
 
 
 if __name__ == "__main__":
