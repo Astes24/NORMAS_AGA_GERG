@@ -983,7 +983,7 @@ def validar_rango_aga8(composicion: dict, T_K: float, P_kPa: float) -> dict:
     clas_1994, clas_2017 = _TEXTO_RANGO[cod_1994], _TEXTO_RANGO[cod_2017]
 
     if not valido:
-        mensaje = "Fuera de rango de T/P -- FlowXpert no calcularia este caso."
+        mensaje = "Fuera de rango de T/P: este caso no se calcula."
     else:
         mensaje = f"1994: {clas_1994}; 2017: {clas_2017}."
 

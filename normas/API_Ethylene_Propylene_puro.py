@@ -446,8 +446,7 @@ def api_mpms_11_3_2_1_ethylene_puro(temp_f: float, pressure_psia: float,
         return {"density_kg_m3": float("nan"), "z": float("nan"),
                 "fuera_de_rango": fuera_de_rango, "convergio": False,
                 "aviso": ("El solver Newton-Raphson de la ecuacion de estado BWR de "
-                          "Etileno no convergio para esta T/P -- por diseno, este modulo "
-                          "NUNCA recurre al .xll como respaldo, se devuelve NaN explicito. "
+                          "Etileno no convergio para esta T/P: se devuelve NaN explicito. "
                           f"fuera_de_rango={fuera_de_rango!r}.")}
 
     corr = _correccion_tabla_ethylene(temp_f, pressure_psia)
@@ -461,8 +460,8 @@ def api_mpms_11_3_2_1_ethylene_puro(temp_f: float, pressure_psia: float,
         return {"density_kg_m3": float("nan"), "z": float("nan"),
                 "fuera_de_rango": fuera_de_rango, "convergio": False,
                 "aviso": (f"Densidad calculada ({density_lbm_ft3:.4f} lbm/ft3) supera el "
-                          "limite de cordura de 100 lbm/ft3 replicado del binario real "
-                          "(codigo de error 2) -- condicion sin sentido fisico.")}
+                          "limite de 100 lbm/ft3 (Calculation error): condicion sin sentido "
+                          "fisico.")}
 
     T_R = temp_f + 459.67
     z = (pressure_psia * _ETH_M) / (T_R * density_lbm_ft3 * _ETH_R)
@@ -627,8 +626,7 @@ def api_mpms_11_3_3_2_propylene_puro(temp_f: float, pressure_psia: float,
                 "fuera_de_rango": fuera_de_rango, "convergio": False,
                 "aviso": ("El solver secante/regula-falsi de la ecuacion de estado BWR de "
                           "Propileno no convergio (o convergio a una raiz sin sentido "
-                          "fisico) para esta T/P -- por diseno, este modulo NUNCA recurre "
-                          "al .xll como respaldo, se devuelve NaN explicito. "
+                          "fisico) para esta T/P: se devuelve NaN explicito. "
                           f"fuera_de_rango={fuera_de_rango!r}.")}
 
     ctpl = density_lbm_ft3 / 32.6058

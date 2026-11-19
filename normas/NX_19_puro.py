@@ -677,13 +677,9 @@ def nx19_fpv_ghv(p_bar: float, t_degc: float, sg: float, ghv_mj_m3: float,
     if z is None:
         z = float("nan")
         aviso_no_calculable = (
-            "El nucleo cubico real (equivalente Python puro de "
-            f"FUN_1800c9b04/FUN_1800c9f08, rama {r['funcion']}) no dio un "
-            "resultado confiable para esta combinacion de entradas -- el "
-            "binario real devuelve un codigo de error interno en este "
-            "mismo caso (confirmado contra el oraculo .xll directo), no "
-            "un Z utilizable. Se devuelve NaN explicito, no se fabrica un "
-            "numero."
+            "La ecuacion cubica de NX-19 no da un resultado valido para esta "
+            "combinacion de entradas (Calculation error), no hay un Z "
+            "utilizable. Se devuelve NaN explicito."
         )
 
     if z == z and z > 0.0:
@@ -698,9 +694,7 @@ def nx19_fpv_ghv(p_bar: float, t_degc: float, sg: float, ghv_mj_m3: float,
         "fpv": fpv,
         "fuera_de_rango": r["fuera_de_rango"],
         "d_mol_m3": d_mol_m3,
-        "fuente": f"Nx19_Calc puro Python (equivalente {r['funcion']}, "
-                  "porte directo de FUN_1800c9500 y subfunciones reales de "
-                  "FlowXpert.xll -- ver normas/NX_19_puro.py)",
+        "fuente": "NX-19 en Python (ver normas/NX_19_puro.py)",
         "ecalc_valido": r["ecalc_valido"],
         "aviso_no_calculable": aviso_no_calculable,
     }
