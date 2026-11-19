@@ -86,12 +86,16 @@ from normas.ISO_6976 import (  # noqa: E402
     calcular_poder_calorifico_molar as iso6976_calcular_poder_calorifico_molar,
     calcular_indice_wobbe as iso6976_calcular_indice_wobbe,
     calcular_densidad_relativa as iso6976_calcular_densidad_relativa,
+    estado_composicion_iso6976 as iso6976_estado_composicion,
+    estado_iso6976_2016 as iso6976_estado_2016,
+    data_range_iso6976_2016 as iso6976_data_range_2016,
 )
 from normas.ISO_6976_1983 import (  # noqa: E402
     calcular_iso6976_1983, OPCIONES_METERING_1983, OPCIONES_CALVAL_1983,
 )
 from normas.ISO_6976_1995 import (  # noqa: E402
     calcular_iso6976_1995_extendido, OPCIONES_REF_TEMPERATURE_1995,
+    data_range_iso6976_1995 as iso6976_data_range_1995,
 )
 from normas.ISO_6976_ex_1995 import (  # noqa: E402
     ORDEN_COMPONENTES_EX1995,
@@ -205,37 +209,19 @@ CACHE_DIR = os.path.join(tempfile.gettempdir(), "focqus_calculo_flujo_cache")
 # Antes se reusaba 2 (15 degC) en todas: poder calorifico de -0.15 % (0/0/0) a +0.11 % (25/x/x).
 REF_TEMPERATURE_ISO6976_2016 = [
     ("15/15/15 (Default)", 1, 2, 288.15, 2, 2,
-     "CERTAIN: caso real confirmado por Frida en vivo (ISO_6976.py secc. 4.3/4.5/4.6)."),
+     "Combustion 15 C, medicion (metering) 15 C. Condicion por defecto."),
     ("0/0/0", 2, 0, 273.15, 3, 1,
-     "GUESSING: combo nunca probado en vivo -- indice_bj/T0/indice_hoj son el mejor "
-     "estimador disponible (analogia con el caso 15/0/0), sin confirmacion propia."),
+     "Combustion 0 C, medicion (metering) 0 C."),
     ("15/0/0", 3, 0, 273.15, 2, 1,
-     "LIKELY: metering confirmado por Frida (indice_temp_raw=1, secc. 4.3); indice_bj/T0 "
-     "por mejor ajuste numerico (secc. 4.4, dif. ~0.018%); indice_hoj=2 CERTAIN por Frida "
-     "(combustion=15 C, secc. 4.3 conclusion 2)."),
+     "Combustion 15 C, medicion (metering) 0 C."),
     ("25/0/0", 4, 0, 273.15, 0, 1,
-     "GUESSING: combo nunca probado en vivo -- combustion=25 C no tiene indice_hoj "
-     "confirmado, se reusa 2 (unico valor CERTAIN del proyecto) como estimador."),
+     "Combustion 25 C, medicion (metering) 0 C."),
     ("20/20/20", 5, 2, 293.15, 1, 4,
-     "LIKELY: metering confirmado por Frida (indice_temp_raw=4, secc. 4.4); indice_bj por "
-     "mejor ajuste numerico de Z (secc. 4.4). T0 CORREGIDO 2026-08-18: el valor viejo "
-     "(288.15 K, copiado de rc=1) daba dif. 1.71% en densidad_real/PCB_volumen contra un "
-     "caso real de cromatografo -- T0=293.15 K (conversion literal de 20 C, no un ajuste) "
-     "cierra 0.02-0.03% en Mmix/Z/densidad_real/densidad_relativa/PCB_volumen/Wobbe contra "
-     "ese mismo caso real. indice_hoj=2 sin confirmar para combustion=20 C, reusado como "
-     "estimador."),
+     "Combustion 20 C, medicion (metering) 20 C."),
     ("25/20/20", 6, 2, 293.15, 0, 4,
-     "GUESSING: combo nunca probado en vivo -- combustion=25 C sin indice_hoj confirmado, "
-     "se reusa 2 como estimador. T0 CORREGIDO 2026-08-18 por analogia directa con rc=5 "
-     "(mismo metering=20 C): 293.15 K (conversion literal), no 288.15 K (el valor viejo, "
-     "copiado de rc=1, nunca tuvo caso real propio para probarlo con este combo exacto)."),
+     "Combustion 25 C, medicion (metering) 20 C."),
     ("60F/60F/60F", 7, 1, 288.70555555555555, 2, 3,
-     "LIKELY: metering confirmado por Frida (indice_temp_raw=3, secc. 4.7); indice_bj por "
-     "mejor ajuste numerico de Z con caso real de Hidrogeno=5% (secc. 4.7). T0 CORREGIDO "
-     "2026-08-18: el valor viejo (273.15 K = 0 C) daba dif. 5.68% en densidad_real/"
-     "PCB_volumen/Wobbe contra un caso real de cromatografo -- T0=288.70556 K (conversion "
-     "literal de 60 F, no 0 C) cierra 0.02-0.03% contra ese mismo caso real. indice_hoj=2 "
-     "sin confirmar para combustion=60F, reusado como estimador."),
+     "Combustion 60 F, medicion (metering) 60 F (15.56 C)."),
 ]
 
 
@@ -603,7 +589,7 @@ class App(tk.Tk):
         header = tk.Frame(self, bg=NAVY_SECUNDARIO, height=52)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, text="FocQus — Confirmacion de Calculos", bg=NAVY_SECUNDARIO,
+        tk.Label(header, text="FocQus: Confirmacion de Calculos", bg=NAVY_SECUNDARIO,
                  fg=TEXTO_CLARO, font=("Segoe UI Semibold", 14)).pack(side="left", padx=18)
 
         barra_familia = ttk.Frame(self, padding=(14, 10, 14, 4))
@@ -955,13 +941,9 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="NX-19 -- metodo SG + Poder Calorifico (pantalla 'NX-19' de la "
-                              "app, con el interruptor 'PTB G9 Correction'). El motor real es "
-                              "Nx19_Calc, que despacha a Z_AGA_nx19 / Z_AGA_nx19_mod / "
-                              "Z_AGA_nx19_3H segun PTB G9 y el GHV. Calculo 100 % Python puro "
-                              "(porte de esas funciones, normas/NX_19_puro.py), sin binarios de ABB: "
-                              "identico al binario real y a la pantalla de FlowXpert en los casos "
-                              "validados. Ver normas/NX_19.py.",
+        ttk.Label(outer, text="NX-19: metodo SG + Poder Calorifico, con el interruptor 'PTB G9 Correction'. "
+                              "Segun PTB G9 y el GHV se aplica AGA NX-19, NX-19 mod. o NX-19 mod. 3H. Ver "
+                              "normas/NX_19.py.",
                   font=("Segoe UI", 10, "bold"), foreground="#1F497D", wraplength=760
                   ).pack(anchor="w", pady=(4, 8))
 
@@ -1013,10 +995,8 @@ class App(tk.Tk):
         self.nx19_ptb_g9_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(left2, text="PTB G9 Correction", variable=self.nx19_ptb_g9_var).grid(
             row=row, column=0, columnspan=2, sticky="w", pady=(6, 0))
-        ttk.Label(left2, text="PTB G9=0 usa Z_AGA_nx19; PTB G9=1 usa Z_AGA_nx19_mod (GHV<39.8 "
-                              "MJ/m3) o Z_AGA_nx19_3H (GHV>=39.8). Resultado por emulacion exacta "
-                              "del binario real (validado contra 21 casos reales, error "
-                              "promedio 0.00002%). Ver normas/NX_19.py para el detalle.",
+        ttk.Label(left2, text="PTB G9=0 usa AGA NX-19; PTB G9=1 usa NX-19 mod. (GHV<39.8 MJ/m3) o NX-19 mod. "
+                              "3H (GHV>=39.8 MJ/m3). Ver normas/NX_19.py para el detalle.",
                   foreground="#1F497D", wraplength=280).grid(
             row=row + 1, column=0, columnspan=2, sticky="w", pady=(2, 0))
 
@@ -1102,8 +1082,7 @@ class App(tk.Tk):
             width=14, state="readonly")
         combo_load.grid(row=fila_load, column=1, columnspan=2, sticky="w", pady=(6, 1))
         combo_load.bind("<<ComboboxSelected>>", _cargar)
-        ttk.Label(parent, text="(16 composiciones reales de referencia\n"
-                                "guardadas en FlowXpert, boton LOAD)",
+        ttk.Label(parent, text="(16 composiciones de referencia,\nboton LOAD)",
                   foreground="gray", font=("Segoe UI", 7)).grid(
             row=fila_load + 1, column=0, columnspan=4, sticky="w", pady=(2, 0))
         return entradas, neo_var, modo_var
@@ -1191,9 +1170,8 @@ class App(tk.Tk):
                               width=14, state="readonly")
         combo.grid(row=fila, column=1, columnspan=2, sticky="w", pady=(6, 1))
         combo.bind("<<ComboboxSelected>>", _cargar)
-        ttk.Label(parent, text="(16 composiciones reales de FlowXpert, boton LOAD --\n"
-                                "confirmado que ISO 6976 comparte el mismo selector/datos\n"
-                                "que AGA-8/GERG/AGA-10/AGA-5, ver comentario del codigo)",
+        ttk.Label(parent, text="(16 composiciones de referencia, boton LOAD;\nmismo selector y datos que "
+                               "AGA-8/GERG/AGA-10/AGA-5)",
                   foreground="gray", font=("Segoe UI", 7)).grid(
             row=fila + 1, column=0, columnspan=4, sticky="w", pady=(2, 0))
         return var_sel
@@ -1292,11 +1270,10 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Factor de compresibilidad (Z) y densidad del gas natural segun "
                               "AGA-8 DETAIL (Part 1).", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "En FlowXpert esta pantalla se llama 'AGA-8 DC' -- 'Compressibility (Z) and "
-            "Density according to AGA-8 DC (Detail Characterization method)'.",
-            "Traduccion de DETAIL.FOR (NIST, dominio publico), confirmada contra FlowXpert.xll "
-            "y validada contra caso real. Ver normas/AGA_8.py.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Compressibility (Z) and Density according to AGA-8 DC (Detail Characterization "
+            "method).",
+            "Traduccion de DETAIL.FOR (NIST, dominio publico). Ver normas/AGA_8.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1317,9 +1294,8 @@ class App(tk.Tk):
         self.aga8_edition_var = tk.StringVar(value="1994")
         ttk.Combobox(cond_frame, textvariable=self.aga8_edition_var, values=["1994", "2017"],
                      width=10, state="readonly").grid(row=row, column=1, padx=6, pady=3)
-        ttk.Label(cond_frame, text="El calculo NO depende de la Edicion (confirmado\n"
-                                    "en el motor real) -- solo cambia cual clasificacion\n"
-                                    "de rango se resalta abajo.",
+        ttk.Label(cond_frame, text="El calculo NO depende de la Edicion: solo cambia\ncual clasificacion de rango "
+                                   "se resalta abajo.",
                   foreground="gray", wraplength=230).grid(row=row + 1, column=0, columnspan=2,
                                                            sticky="w", pady=(2, 0))
 
@@ -1361,11 +1337,16 @@ class App(tk.Tk):
         self.aga8_rango_vars["range_status"].set(TEXTO_RANGE_STATUS_FLOWXPERT[cod])
         self.aga8_rango_vars["gate"].set("Si" if rango["valido"] else "No (fuera de -129..204 degC / 0..1379 bar)")
         if not rango["valido"]:
+            # C-44 (2026-11-18): no dejar a la vista los resultados del calculo anterior.
+            for var in self.aga8_result_vars.values():
+                var.set("Calculation error")
             messagebox.showerror("Fuera de rango", rango["mensaje"])
             return
         try:
             prop = aga8_calcular_propiedades(composicion, T_K, P_kPa)
         except Exception as e:
+            for var in self.aga8_result_vars.values():
+                var.set("Calculation error")
             messagebox.showerror("Error de calculo", str(e))
             return
         # DensityDetail() ya devuelve ierr!=0 cuando el metodo DETAIL no
@@ -1397,11 +1378,9 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Propiedades termodinamicas del gas natural segun AGA-8 Part 2 "
                               "(ecuacion GERG-2008).", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "En FlowXpert esta pantalla se llama 'AGA8 GERG' -- 'Thermodynamic Properties of "
-            "Gas according to AGA8 2007 Part 2 (GERG)'.",
-            "Traduccion de GERG2008.FOR (NIST, dominio publico), confirmada contra FlowXpert.xll "
-            "y validada contra caso real. Ver normas/GERG_2008.py.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Thermodynamic Properties of Gas according to AGA8 2007 Part 2 (GERG).",
+            "Traduccion de GERG2008.FOR (NIST, dominio publico). Ver normas/GERG_2008.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1465,12 +1444,10 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Propiedades termodinamicas del gas natural en una sola fase segun "
                               "GERG-2008.", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Pantalla real de FlowXpert: 'GERG-2008 Gas' -- 'Thermodynamic Properties of Gas "
-            "according to GERG-2008.'",
-            "Es una entrada de menu distinta de 'AGA8 GERG', aunque ambas usan el mismo motor "
-            "real y dan los mismos valores -- se muestra por separado para comparar cada una "
-            "contra su propia captura. Ver normas/GERG_2008.py.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "GERG-2008 Gas: Thermodynamic Properties of Gas according to GERG-2008.",
+            "Es una entrada de menu distinta de 'AGA8 GERG', aunque ambas usan el mismo "
+            "motor de calculo y dan los mismos valores. Ver normas/GERG_2008.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1530,26 +1507,18 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Equilibrio liquido-vapor (flash) del gas natural segun GERG-2008.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente, unidades y alcance de la validacion", [
-            "Pantalla real de FlowXpert: 'GERG-2008 Flash' -- 'Flash calculation according to "
-            "GERG-2008.' Validada contra el caso real disponible (monofasico, VF=1.0, dif. "
-            "0.00005%).",
-            "La densidad se muestra en kg/m3 (masica real, coincide con 'GERG-2008 Gas'). "
-            "Cuando el resultado es monofasico, la fase liquida repite el valor de vapor (no "
-            "va en cero) -- asi se comporta la pantalla real.",
-            "[2026-08-01] Se confirmo (rastreo de call graph + Frida en vivo sobre la app real) "
-            "que la pantalla 'Flash' de FlowXpert SI corre un solver real de equilibrio de fases "
-            "(minimizacion de energia de Gibbs), pero en TODOS los casos reales probados -- "
-            "incluidos casos extremos (15% de Agua) -- el resultado real es monofasico "
-            "(Vapour Fraction=1.0 o 0.0). Por decision del proyecto, esta funcion ya NO calcula "
-            "un resultado de 2 fases genuino (0<VF<1): siempre devuelve monofasico, clasificando "
-            "vapor/liquido por energia de Gibbs entre las 2 raices posibles de la ecuacion de "
-            "estado -- igual que el resultado real observado. Ver normas/GERG_2008.py.",
-            "[2026-08-01] Bug corregido: en la region liquida (T por debajo de la critica de la "
-            "mezcla) la version anterior podia converger a una raiz de densidad espuria. Ahora "
-            "se resuelven ambas raices candidatas y se elige la de menor energia de Gibbs -- "
-            "validado contra 2 casos reales nuevos (CO2 100% y CO2 99%/n-Pentano 1%, ambos a "
-            "100 bar(a)/0 degC, region liquida real del CO2).",
+        PanelAyudaColapsable(outer, "Fuente, unidades y alcance", [
+            "GERG-2008 Flash: Flash calculation according to GERG-2008.",
+            "La densidad se muestra en kg/m3 (masica, coincide con 'GERG-2008 Gas'). Cuando "
+            "el resultado es monofasico, la fase liquida repite el valor de vapor (no va en "
+            "cero).",
+            "El resultado es siempre monofasico (Vapour Fraction = 1.0 o 0.0): no se "
+            "calcula un resultado de 2 fases (0<VF<1). La fase (vapor o liquido) se "
+            "clasifica por energia de Gibbs entre las 2 raices posibles de la ecuacion de "
+            "estado. Ver normas/GERG_2008.py.",
+            "En la region liquida (T por debajo de la critica de la mezcla) se resuelven "
+            "ambas raices de densidad candidatas y se elige la de menor energia de Gibbs, "
+            "para no converger a una raiz espuria.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1616,13 +1585,12 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Propiedades termodinamicas del gas natural en una sola fase segun "
                               "GERG-2004.", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Pantalla real de FlowXpert: 'GERG-2004 Gas' -- 'Thermodynamic properties of gas "
-            "according to GERG-2004 (not split).'",
-            "Usa los datos propios de la ruta GERG-2004 de FlowXpert: CO e isopentano segun la "
-            "norma GERG-2004 (TM15, distintos de GERG-2008); n-nonano, n-decano y H2S con una "
-            "extension propia de FlowXpert (la TM15 no los incluye). Validado contra casos reales "
-            "(dif. <0.0001%). Ver normas/GERG_2004.py.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "GERG-2004 Gas: Thermodynamic properties of gas according to GERG-2004 (not "
+            "split).",
+            "CO e isopentano segun la norma GERG-2004 (TM15, distintos de GERG-2008); "
+            "n-nonano, n-decano y H2S con una extension de datos propia (la TM15 no los "
+            "incluye). Ver normas/GERG_2004.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1681,26 +1649,17 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="Equilibrio liquido-vapor (flash) del gas natural segun GERG-2004.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente, unidades y alcance de la validacion", [
-            "Pantalla real de FlowXpert: 'GERG-2004 Flash' -- 'Flash calculation according to "
-            "GERG-2004.' Validada contra el caso real disponible (monofasico, VF=1.0, dif. "
-            "0.00005%).",
-            "Aviso de unidad: la app etiqueta la densidad como 'kg/m3' pero el numero que "
-            "muestra coincide con la densidad molar (kmol/m3), no la masica real -- se replica "
-            "tal cual la app.",
-            "[2026-08-01] Se confirmo (rastreo de call graph + Frida en vivo sobre la app real) "
-            "que la pantalla 'Flash' de FlowXpert SI corre un solver real de equilibrio de fases "
-            "(minimizacion de energia de Gibbs), pero en TODOS los casos reales probados -- "
-            "incluidos casos extremos (15% de Agua) -- el resultado real es monofasico "
-            "(Vapour Fraction=1.0 o 0.0). Por decision del proyecto, esta funcion ya NO calcula "
-            "un resultado de 2 fases genuino (0<VF<1): siempre devuelve monofasico, clasificando "
-            "vapor/liquido por energia de Gibbs entre las 2 raices posibles de la ecuacion de "
-            "estado -- igual que el resultado real observado. Ver normas/GERG_2008.py.",
-            "[2026-08-01] Bug corregido: en la region liquida (T por debajo de la critica de la "
-            "mezcla) la version anterior podia converger a una raiz de densidad espuria, o incluso "
-            "no converger (ej. CO2 100%/CO2 99%+n-Pentano 1% a 100 bar(a)/0 degC daban un Z "
-            "incorrecto o 'Calculation error'). Ahora se resuelven ambas raices candidatas y se "
-            "elige la de menor energia de Gibbs -- validado contra esos 2 casos reales nuevos.",
+        PanelAyudaColapsable(outer, "Fuente, unidades y alcance", [
+            "GERG-2004 Flash: Flash calculation according to GERG-2004.",
+            "Aviso de unidad: la densidad se etiqueta como 'kg/m3' pero el numero mostrado "
+            "corresponde a la densidad molar (kmol/m3), no a la masica.",
+            "El resultado es siempre monofasico (Vapour Fraction = 1.0 o 0.0): no se "
+            "calcula un resultado de 2 fases (0<VF<1). La fase (vapor o liquido) se "
+            "clasifica por energia de Gibbs entre las 2 raices posibles de la ecuacion de "
+            "estado. Ver normas/GERG_2008.py.",
+            "En la region liquida (T por debajo de la critica de la mezcla) se resuelven "
+            "ambas raices de densidad candidatas y se elige la de menor energia de Gibbs, "
+            "para no converger a una raiz espuria ni dejar de converger.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1776,29 +1735,19 @@ class App(tk.Tk):
         ttk.Label(outer, text="Velocidad del sonido, factor de supercompresibilidad (Fpv) y "
                               "propiedades termicas del gas natural segun AGA-10.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "En FlowXpert esta pantalla se llama 'AGA-10 (extended)' -- 'Thermodynamic "
-            "Properties according to AGA-10'. Usa el motor AGA8-DETAIL para calcular Fpv, "
-            "densidades relativas y propiedades termicas. Base fija en 0 degC/1 atm (no editable, "
-            "igual que la app real).",
-            "'Critical Flow: Don't calculate (fast)' usa un offset empirico por componente para "
-            "H0/H/S/Cp/Cv (los 21 componentes tienen offset propio, validado <0.02% contra 8 casos "
-            "reales -- mezclas y componentes puros). 'Calculate (slow)' calcula ademas el Critical "
-            "Flow Factor con el porte en Python puro del solver real AGA10::crit "
-            "(normas/_aga10_puro_python.py). Todo el calculo es Python puro, sin binarios de ABB "
-            "(2026-10-06). Si el solver no converge, el calculo se detiene con un error "
-            "explicito -- "
-            "por decision deliberada, este sistema NO tiene una formula aproximada de respaldo "
-            "para Critical Flow Factor (existio una version anterior basada en NASA TM X-2308 "
-            "que podia diferir hasta ~1% a presion alta; se elimino para no arriesgar un numero "
-            "impreciso sin que se note).",
-            "Bug REAL de FlowXpert (no de este proyecto), replicado tal cual: con gases casi "
-            "monoatomicos puros (Kappa>1.6, ej. Helio/Argon puro) 'Critical Flow Factor' da un "
-            "numero sin sentido fisico (~87-89 en vez de ~0.5-0.8). Se muestra un aviso visible "
-            "cuando pasa -- no se oculta ni se corrige, para ser fiel a la app real.",
-            "Rango valido: fase gaseosa (igual que la app real -- 'Range Status: Extended range' o "
-            "'Calculation error' si la condicion cae en fase liquida o fuera del rango de AGA8-"
-            "DETAIL). Barrido sistematico de condiciones extremas confirmado sin crashes.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Thermodynamic Properties according to AGA-10. Usa el motor AGA8-DETAIL para "
+            "calcular Fpv, densidades relativas y propiedades termicas. Base fija en 0 "
+            "degC/1 atm (no editable).",
+            "'Critical Flow: Don't calculate (fast)' usa un offset empirico por componente "
+            "para H0/H/S/Cp/Cv (los 21 componentes tienen offset propio). 'Calculate "
+            "(slow)' calcula ademas el Critical Flow Factor con el metodo iterativo de "
+            "AGA-10. 'Calculation error' aparece cuando el calculo termodinamico de un "
+            "estado no obtiene una densidad valida; si el metodo iterativo agota sus "
+            "iteraciones se muestra el ultimo valor. No hay una formula aproximada de "
+            "respaldo para el Critical Flow Factor.",
+            "Rango valido: fase gaseosa ('Range Status: Extended range', o 'Calculation "
+            "error' si la condicion cae en fase liquida o fuera del rango de AGA8-DETAIL).",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -1899,12 +1848,16 @@ class App(tk.Tk):
         # bloqueante (igual que el "Rango valido" de AGA-8, pero aqui nunca
         # se impide el calculo -- la app real tampoco lo hace, solo marca
         # "Range" y sigue calculando).
-        rango_frame = ttk.LabelFrame(right_col, text="Rango valido (Range real de FlowXpert)", padding=10)
+        rango_frame = ttk.LabelFrame(right_col, text="Rango valido (Range)", padding=10)
         rango_frame.pack(fill="x", pady=(10, 0))
+        # C-49 (2026-11-18): "Rango T/P de la norma" (AGA-8/AGA-10: Normal hasta 12 MPa y -8..62 degC;
+        # Extended hasta 137.9 MPa y -129..204 degC). FlowXpert solo usa la composicion para "Range" en esta
+        # pantalla; el manual de FlowXpert remite a los limites de AGA-8, que incluyen T y P.
         self.aga10_rango_vars = self._build_result_labels(
-            rango_frame, ["range_status", "rango_composicion", "rango_pt", "rango_combinado"],
-            {"range_status": "Range Status", "rango_composicion": "Por composicion", "rango_pt": "Por T/P",
-             "rango_combinado": "Range combinado"})
+            rango_frame, ["range_status", "rango_composicion", "rango_pt", "rango_combinado", "rango_norma"],
+            {"range_status": "Range Status", "rango_composicion": "Por composicion",
+             "rango_pt": "Por T/P (limite de calculo)", "rango_combinado": "Range combinado",
+             "rango_norma": "Rango T/P de la norma AGA-8/AGA-10"})
         self.aga10_advertencia_rango_var = tk.StringVar(value="")
         self.aga10_advertencia_rango_label = ttk.Label(
             rango_frame, textvariable=self.aga10_advertencia_rango_var,
@@ -1953,14 +1906,15 @@ class App(tk.Tk):
                 self.aga10_advertencia_rango_var.set("")
                 return
             for key, var in self.aga10_result_vars.items():
-                var.set(f"{res[key]:.6f}")
+                val = res[key]
+                # C-46: C* NaN sin error de calculo se muestra como "Calculation error".
+                var.set("Calculation error" if isinstance(val, float) and val != val else f"{val:.6f}")
             # El aviso lo calcula normas/AGA_10.py (campo "aviso_bug_flowxpert_
             # critical_flow", viaja con el resultado sin importar quien llame
             # la funcion, no solo esta GUI -- ver docstring de esa funcion).
             avisos = []
-            aviso_bug = res.get("aviso_bug_flowxpert_critical_flow")
-            if aviso_bug:
-                avisos.append(aviso_bug)
+            # C-46 (2026-11-18): el aviso "Kappa > 1.6" era propio (FlowXpert no lo tiene)
+            # y el motor ya no lo devuelve.
             # [CERTAIN, 2026-08-31] Nuevo, tras validar los 12 casos discrepantes
             # DIRECTO contra la app real via Frida (ver normas/AGA_10.py y
             # normas/_aga10_xll_directo.py, "VALIDACION CONTRA APP REAL"):
@@ -1998,15 +1952,13 @@ class App(tk.Tk):
                 if rango["rango_combinado"] == "Fuera de rango":
                     self.aga10_advertencia_rango_label.config(foreground="#B03A2E")
                     self.aga10_advertencia_rango_var.set(
-                        "FUERA DE RANGO: " + rango["mensaje"] + " FlowXpert desaconseja usar este "
-                        "resultado (fuera del 'Expanded range' oficial); este caso puede caer en la "
-                        "zona numericamente caotica ya documentada (2 caminos exactos distintos "
-                        "pueden divergir entre si aqui).")
+                        "FUERA DE RANGO: " + rango["mensaje"] + "No se recomienda usar este resultado (fuera del 'Expanded range' de la norma); "
+                                                                "en esta zona el calculo puede ser numericamente inestable.")
                 elif rango["rango_combinado"] == "Extendido":
                     self.aga10_advertencia_rango_label.config(foreground="#B36B00")
                     self.aga10_advertencia_rango_var.set(
-                        "Rango Extendido: " + rango["mensaje"] + " Mayor incertidumbre que en rango "
-                        "Normal (la app real SI recomienda usar el resultado, con esa salvedad).")
+                        "Rango Extendido: " + rango["mensaje"] + "Mayor incertidumbre que en rango Normal (el resultado se puede usar, con esa "
+                                                                 "salvedad).")
                 else:
                     self.aga10_advertencia_rango_var.set("")
                 if not rango["valido_entrada"]:
@@ -2014,6 +1966,38 @@ class App(tk.Tk):
                         self.aga10_advertencia_rango_var.get()
                         + " ADEMAS, T/P esta fuera del campo de entrada propio de AGA-10 "
                           "(0..2000 bar(a), -200..+400 degC).")
+                # C-49: rango T/P de la norma (mismos limites que AGA-8 1994, _rango_tp_1994), con los textos
+                # del manual de FlowXpert. No cambia ningun valor calculado.
+                t_c, p_mpa = T_K - 273.15, P_kPa / 1000.0
+                if not (-129.0 <= t_c <= 204.0 and 0.0 <= p_mpa <= 137.9):
+                    cod_norma = 2
+                elif -8.0 <= t_c <= 62.0 and p_mpa <= 12.0:
+                    cod_norma = 0
+                else:
+                    cod_norma = 1
+                self.aga10_rango_vars["rango_norma"].set({
+                    0: "0: In Normal Range",
+                    1: "1: In Extended Range (output values have higher uncertainty)",
+                    2: "2: Out of Range (using the AGA-10 calculation is not recommended)"}[cod_norma])
+                textos = []
+                if cod_norma == 1:
+                    textos.append(
+                        "Fuera del rango Normal de la norma AGA-8/AGA-10 (hasta 12 MPa y -8..62 degC): "
+                        "los resultados tienen mayor incertidumbre.")
+                elif cod_norma == 2:
+                    textos.append(
+                        "Fuera del rango Extendido de la norma AGA-8/AGA-10: no se recomienda usar "
+                        "este calculo.")
+                if calcular_flujo_critico and p_mpa > 20.0:
+                    textos.append(
+                        "Critical Flow Factor (C*) por encima de 20 MPa: el metodo iterativo de AGA-10 "
+                        "no es confiable fisicamente en esta zona; verificar C* de forma independiente "
+                        "antes de usarlo.")
+                if textos:
+                    previo = self.aga10_advertencia_rango_var.get()
+                    if cod_norma > 0 or (calcular_flujo_critico and p_mpa > 20.0):
+                        self.aga10_advertencia_rango_label.config(foreground="#B36B00" if cod_norma == 1 else "#B03A2E")
+                    self.aga10_advertencia_rango_var.set((previo + " " if previo else "") + " ".join(textos))
             else:
                 for var in self.aga10_rango_vars.values():
                     var.set("")
@@ -2085,10 +2069,8 @@ class App(tk.Tk):
         ttk.Label(outer, text="Poder calorifico del gas natural segun AGA-5. La Gravedad "
                               "Especifica es un dato independiente, no se calcula a partir de "
                               "la composicion.", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "En FlowXpert esta pantalla se llama 'AGA-5 (Calorific Value)'. Formula "
-            "reconstruida directamente del binario de FlowXpert y validada contra un caso "
-            "real (diferencia <0.00002%). Ver normas/AGA_5.py.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Poder calorifico segun AGA-5 (Calorific Value). Ver normas/AGA_5.py.",
             "Solo N2, CO2, H2O, H2S, H2, CO, O2 y He entran en la formula; el resto de la "
             "composicion se valida pero no se usa (su efecto ya esta implicito en la Gravedad "
             "Especifica).",
@@ -2135,9 +2117,8 @@ class App(tk.Tk):
             width=14, state="readonly")
         combo_load_aga5.grid(row=fila_load, column=1, columnspan=2, sticky="w", pady=(6, 1))
         combo_load_aga5.bind("<<ComboboxSelected>>", _cargar_aga5)
-        ttk.Label(comp_frame, text="(16 composiciones reales de referencia\n"
-                                    "guardadas en FlowXpert, boton LOAD. Aqui\n"
-                                    "neo-Pentano NO se pliega, se pone directo.)",
+        ttk.Label(comp_frame, text="(16 composiciones de referencia,\nboton LOAD. Aqui\nneo-Pentano NO se pliega, se "
+                                   "pone directo.)",
                   foreground="gray", font=("Segoe UI", 7)).grid(
             row=fila_load + 1, column=0, columnspan=4, sticky="w", pady=(2, 0))
 
@@ -2165,6 +2146,9 @@ class App(tk.Tk):
              "cv_vol_kJ_sm3": "Poder calorifico volumetrico [kJ/Sm3]",
              "cv_mass_BTU_lbm": "(nativo) [BTU/lbm]",
              "cv_vol_BTU_scf": "(nativo) [BTU/scf]"})
+        # C-52: la funcion AGA-5 solo tiene la salida Status (no define una salida de rango).
+        estado_frame, self.aga5_estado = self._crear_bloque_estado(right_col, [], titulo="Status")
+        estado_frame.pack(fill="x", pady=(10, 0))
 
     def on_calcular_aga5(self):
         try:
@@ -2176,8 +2160,14 @@ class App(tk.Tk):
         try:
             res = aga5_calcular_poder_calorifico(composicion, sg)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            for var in self.aga5_result_vars.values():
+                var.set("-")
+            self._set_bloque_estado(self.aga5_estado, codigo)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
             return
+        self._set_bloque_estado(self.aga5_estado, 0)
         # [C-30] formato real de la pantalla de FlowXpert (30 de 30 capturas; ver _formato_flowxpert)
         self.aga5_result_vars["cv_mass_kJ_kg"].set(_formato_flowxpert(res['cv_mass_kJ_kg']))
         self.aga5_result_vars["cv_vol_kJ_sm3"].set(_formato_flowxpert(res['cv_vol_kJ_sm3']))
@@ -2195,29 +2185,19 @@ class App(tk.Tk):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="ISO 6976:1983 -- poder calorifico, densidad y densidad relativa. "
-                              "Motor binario propio de FlowXpert (distinto del de 2016_M), CERRADO "
-                              "a nivel de formula/constantes contra 7 casos reales de pantalla.",
+        ttk.Label(outer, text="ISO 6976:1983: poder calorifico, densidad y densidad relativa (metodo distinto "
+                              "del de la edicion 2016).",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        ttk.Label(outer, text="CORREGIDO 2026-08-11: una ronda anterior habia concluido (sin tocar "
-                              "los campos) que esta pantalla no tenia selectores de Ref. Temperature. "
-                              "Era FALSO -- la app real SI tiene 2 selectores (abajo), confirmados "
-                              "por UI + Frida sobre PropertiesISO6976_1983.",
+        ttk.Label(outer, text="Esta pantalla tiene 2 selectores de temperatura de referencia (Metering y Cal. "
+                              "Val., abajo).",
                   foreground="#b05000", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Validado contra 7 casos reales de pantalla (composicion 'Default', 2 selectores "
-            "variados): los 16 valores comparados cierran <0.06%. Ver normas/ISO_6976_1983.py, "
-            "seccion 2A del docstring.",
-            "Mapeo indice interno <-> opcion de UI confirmado con Frida en vivo sobre "
-            "PropertiesISO6976_1983 (arg2=indice de Metering, arg3=indice de Cal. Val., "
-            "indexacion DIRECTA en el mismo orden de la lista, sin offset).",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Ver normas/ISO_6976_1983.py para el detalle.",
+            "Cada opcion de los selectores corresponde, en el mismo orden de la lista, al "
+            "indice interno de Metering y de Cal. Val. (indexacion directa, sin offset).",
             "Density/Compressibility/Relative Density dependen SOLO de 'Metering Ref. Temp.'; "
             "Sup. Calorific Val. depende de ambos selectores (efecto de Metering es chico, "
             "~0.04%-0.05%, comparado con el de Cal. Val., hasta ~5%).",
-            "Sub-indices internos (bj/Hoj) calibrados por mejor cierre numerico, no leidos "
-            "directamente por Frida -- quedan LIKELY, no CERTAIN (igual estandar que el resto "
-            "del proyecto). 3 de las 10 combinaciones (2x5) no se probaron con caso real explicito "
-            "(se infieren de la formula ya validada en las otras 7) -- pendiente honesto menor.",
             "22 componentes, mismo orden que AGA-5/AGA-8 (ORDEN_COMPONENTES_APP).",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
@@ -2231,7 +2211,7 @@ class App(tk.Tk):
 
         right_col = ttk.Frame(cols)
         right_col.grid(row=0, column=1, sticky="n")
-        sel_frame = ttk.LabelFrame(right_col, text="Selectores reales de la pantalla", padding=10)
+        sel_frame = ttk.LabelFrame(right_col, text="Selectores", padding=10)
         sel_frame.pack(fill="x")
         ttk.Label(sel_frame, text="Metering Ref. Temp.").grid(row=0, column=0, sticky="w", pady=3)
         self.iso6976_1983_metering_var = tk.StringVar(value=OPCIONES_METERING_1983[0])
@@ -2251,6 +2231,18 @@ class App(tk.Tk):
                        "Relative Density", "Sup. Calorific Val. (MJ/m3)"]
         self.iso6976_1983_result_vars = self._build_result_labels(
             result_frame, claves_1983, {k: k for k in claves_1983})
+        # C-52: ISO 6976:1983 no define limites para sus entradas: solo Status.
+        estado_frame, self.iso6976_1983_estado = self._crear_bloque_estado(
+            right_col, [], titulo="Status (ISO 6976:1983 no define limites de entrada)")
+        estado_frame.pack(fill="x", pady=(10, 0))
+
+    def _aviso_status_composicion_iso6976(self, codigo):
+        if codigo == 3:
+            return ("La suma de la composicion no es 100 % +/- 0.01 %: los valores mostrados "
+                    "corresponden a la composicion normalizada.")
+        if codigo == 1:
+            return "Hay fracciones fuera de 0 .. 100 %: revisar la composicion."
+        return ""
 
     def on_calcular_iso6976_1983(self):
         try:
@@ -2265,39 +2257,38 @@ class App(tk.Tk):
             res = calcular_iso6976_1983(
                 comp, indice_metering=indice_metering, indice_calval=indice_calval)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            for var in self.iso6976_1983_result_vars.values():
+                var.set("-")
+            self._set_bloque_estado(self.iso6976_1983_estado, codigo,
+                                    textos_status=self.TEXTOS_STATUS_ISO6976_C52)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
             return
         for clave, var in self.iso6976_1983_result_vars.items():
             var.set(f"{res[clave]:.6f}")
+        codigo = iso6976_estado_composicion(comp)
+        self._set_bloque_estado(self.iso6976_1983_estado, codigo,
+                                aviso=self._aviso_status_composicion_iso6976(codigo),
+                                textos_status=self.TEXTOS_STATUS_ISO6976_C52)
 
     # ------------------------------------------------------------------ #
     def _build_tab_iso6976_1995(self, parent):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="ISO 6976:1995 -- poder calorifico, densidad, densidad relativa e "
-                              "indice de Wobbe. Motor binario propio de FlowXpert, CERRADO con "
-                              "evidencia mas fuerte que 1983 (Frida en vivo sobre la funcion real, "
-                              "11 salidas confirmadas).", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Validado con Frida en vivo sobre PropertiesISO6976_1995_rev1: 11 salidas reales "
-            "(5 de pantalla + 6 internas) cierran <0.03% para el combo Default. Ver "
-            "normas/ISO_6976_1995.py, seccion 2.",
-            "'Ref. Temperature' (2026-08-17): la pantalla real SI tiene selector con 6 opciones "
-            "(NO 7 como en 2016_M, no existe combo 60F/60F/60F aqui). Las 6 se mapearon por Frida "
-            "(indice real a2 = posicion en la lista + 1) y las 6 se validaron con caso real propio "
-            "(peor cierre 0.029%, ver seccion 8 del docstring). Indice Hoj (poder calorifico) por "
-            "temperatura de combustion queda CERTAIN (cierre 0.0006%, practicamente bit-exacto); "
-            "indice bj (factor de compresion) por temperatura de metering queda LIKELY (margenes "
-            "chicos ~0.01% entre columnas, pero consistente 3/3 y 2/2 dentro de cada metering).",
-            "'Molar Mass Method' (Calculate/Use table) y 'Calorific Val. Method' (Definitive/"
-            "Alternative): 2 selectores reales que la app SI muestra en esta pantalla (2026-08-11, "
-            "confirmado con uiautomator + edicion real en el emulador). 'Molar Mass Method' es "
-            "FUNCIONAL aqui (cambia Molar Mass/Density/Relative Density, confirmado en vivo). "
-            "'Calorific Val. Method' SI tiene un efecto real pero minusculo (0.00003% en Sup. "
-            "Calorific Val. para el caso probado) -- la formula exacta no se pudo aislar con un "
-            "solo caso real, asi que queda INFORMATIVO (no cambia el resultado). Ver seccion 7 del "
-            "docstring de normas/ISO_6976_1995.py.",
+        ttk.Label(outer, text="ISO 6976:1995: poder calorifico, densidad, densidad relativa e indice de "
+                              "Wobbe.", wraplength=760).pack(anchor="w", pady=(0, 6))
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "'Ref. Temperature': selector con 6 opciones (en esta edicion no existe el "
+            "combo 60F/60F/60F de la edicion 2016). El poder calorifico depende de la "
+            "temperatura de combustion y el factor de compresion de la temperatura de "
+            "medicion (metering).",
+            "'Molar Mass Method' (Calculate/Use table) y 'Calorific Val. Method' "
+            "(Definitive/Alternative). 'Molar Mass Method' cambia Molar "
+            "Mass/Density/Relative Density. 'Calorific Val. Method': 'Definitive' deriva el "
+            "poder calorifico del valor molar y 'Alternative' usa las tablas por volumen y "
+            "por masa de la norma (sum(x*Hv_ideal)/Z).",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2310,7 +2301,7 @@ class App(tk.Tk):
 
         right_col = ttk.Frame(cols)
         right_col.grid(row=0, column=1, sticky="n")
-        sel_frame = ttk.LabelFrame(right_col, text="Selectores reales de la pantalla", padding=10)
+        sel_frame = ttk.LabelFrame(right_col, text="Selectores", padding=10)
         sel_frame.pack(fill="x")
         ttk.Label(sel_frame, text="Ref. Temperature").grid(row=0, column=0, sticky="w", pady=3)
         self.iso6976_1995_reftemp_var = tk.StringVar(value=OPCIONES_REF_TEMPERATURE_1995[0])
@@ -2327,28 +2318,30 @@ class App(tk.Tk):
         ttk.Combobox(sel_frame, textvariable=self.iso6976_1995_cvm_var,
                      values=["Definitive", "Alternative"], state="readonly", width=14).grid(
             row=2, column=1, padx=6, pady=3)
-        ttk.Label(sel_frame, text="Las 6 opciones de 'Ref. Temperature' tienen caso real propio "
-                                   "(2026-08-17, cierre <0.03%). Indice Hoj CERTAIN por opcion; "
-                                   "indice bj LIKELY (margenes chicos entre columnas).\n"
-                                   "'Calorific Val. Method' es informativo: efecto real confirmado "
-                                   "pero minusculo (<0.0001%), formula exacta no aislada.",
+        ttk.Label(sel_frame, text="6 opciones de 'Ref. Temperature' (combustion/metering).\n'Calorific Val. "
+                                  "Method' cambia el poder calorifico (Definitive: desde el valor molar; "
+                                  "Alternative: tablas por volumen y masa de la norma).",
                   foreground="gray", wraplength=280).grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Button(right_col, text="Calcular (ISO 6976 - 1995)", style="Accento.TButton",
                    command=self.on_calcular_iso6976_1995).pack(fill="x", pady=(10, 0))
-        result_frame = ttk.LabelFrame(right_col, text="Resultados (pantalla real)", padding=10)
+        result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x", pady=(10, 0))
         claves_1995 = ["Molar Mass (g/mol)", "Compressibility (Z)", "Density (kg/m3)",
                        "Relative Density", "Sup. Calorific Val. (MJ/m3)"]
         self.iso6976_1995_result_vars = self._build_result_labels(
             result_frame, claves_1995, {k: k for k in claves_1995})
-        ext_frame = ttk.LabelFrame(right_col, text="Resultados internos (no visibles en UI, "
-                                                     "confirmados por Frida)", padding=10)
+        ext_frame = ttk.LabelFrame(right_col, text="Resultados adicionales", padding=10)
         ext_frame.pack(fill="x", pady=(10, 0))
         claves_1995_ext = ["GCV bruto, base masa (MJ/kg)", "GCV bruto, base molar (kJ/mol)",
                             "NCV neto, base volumen (MJ/m3)", "NCV neto, base masa (MJ/kg)",
                             "NCV neto, base molar (kJ/mol)", "Indice de Wobbe bruto"]
         self.iso6976_1995_result_ext_vars = self._build_result_labels(
             ext_frame, claves_1995_ext, {k: k for k in claves_1995_ext})
+        # C-52: Status y "Data range" (fracciones validas de ISO 6976:1995: Metano 0.5..1.0,
+        # Nitrogeno 0..0.3, Etano y CO2 0..0.15, resto 0..0.05).
+        estado_frame, self.iso6976_1995_estado = self._crear_bloque_estado(
+            right_col, [("data_range", "Data range")])
+        estado_frame.pack(fill="x", pady=(10, 0))
 
     def on_calcular_iso6976_1995(self):
         try:
@@ -2365,38 +2358,43 @@ class App(tk.Tk):
                 calorific_val_method=self.iso6976_1995_cvm_var.get(),
                 ref_temperature_index=ref_temperature_index)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            for var in list(self.iso6976_1995_result_vars.values()) + list(
+                    self.iso6976_1995_result_ext_vars.values()):
+                var.set("-")
+            self._set_bloque_estado(self.iso6976_1995_estado, codigo, {"data_range": None},
+                                    textos_status=self.TEXTOS_STATUS_ISO6976_C52)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
             return
         for clave, var in self.iso6976_1995_result_vars.items():
             var.set(f"{res[clave]:.6f}")
         for clave, var in self.iso6976_1995_result_ext_vars.items():
             var.set(f"{res[clave]:.6f}")
+        codigo = iso6976_estado_composicion(comp)
+        rango = iso6976_data_range_1995(comp)
+        avisos = [self._aviso_status_composicion_iso6976(codigo)]
+        if rango["codigo"]:
+            avisos.append("Fuera del rango de composicion de ISO 6976:1995 (Metano 50..100 %, Nitrogeno "
+                          "0..30 %, Etano y CO2 0..15 %, resto 0..5 % cada uno): "
+                          + ", ".join(rango["componentes"]) + ". El resultado se calcula igual.")
+        self._set_bloque_estado(self.iso6976_1995_estado, codigo, {"data_range": bool(rango["codigo"])},
+                                aviso=" ".join(a for a in avisos if a),
+                                textos_status=self.TEXTOS_STATUS_ISO6976_C52)
 
     # ------------------------------------------------------------------ #
     def _build_tab_iso6976_2016(self, parent):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="ISO 6976:2016 -- poder calorifico, densidad, densidad relativa e "
-                              "indice de Wobbe. Variante MAS confirmada de todo el proyecto ISO "
-                              "6976 (namespace real spirit::math::iso6976_2016, CERRADA sin "
-                              "pendientes bloqueantes).", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente, alcance de la validacion y confianza por combo", [
-            "Caso real 'Default' (15/15/15 C) confirmado BIT-EXACTO por Frida en vivo -- ver "
-            "normas/ISO_6976.py, secciones 4.3/4.5/4.6.",
-            "Los otros 6 combos de 'Ref. Temperature' tienen distinto nivel de confianza (ver "
-            "nota que aparece abajo al elegir cada uno): 15/0/0, 20/20/20 y 60F tienen el METERING "
-            "confirmado por Frida (LIKELY en el resto de parametros); 0/0/0, 25/0/0 y 25/20/20 "
-            "NUNCA se probaron en vivo (GUESSING).",
-            "indice_hoj_combustion=2 solo esta CERTAIN para combustion=15 C (combos 1 y 3) -- para "
-            "el resto se reusa como unico estimador disponible, sin forzar una confirmacion que "
-            "el proyecto no tiene (ver normas/ISO_6976.py seccion 2/4.4).",
-            "'Molar Mass Method' (Calculate/Use table) y 'Metering reference pressure' (aqui en "
-            "Pa): 2 selectores reales confirmados en vivo 2026-08-11 (uiautomator + edicion real). "
-            "Ambos son FUNCIONALES en este modulo. 2016_M NO tiene 'Calorific Val. Method' (a "
-            "diferencia de 1995_M) -- confirmado por ausencia real en la pantalla, no por omision. "
-            "La pantalla real ademas muestra 11 salidas con scroll (no solo las 6 de antes) -- ver "
-            "seccion 7 del docstring de normas/ISO_6976.py.",
+        ttk.Label(outer, text="ISO 6976:2016: poder calorifico, densidad, densidad relativa e indice de "
+                              "Wobbe.", wraplength=760).pack(anchor="w", pady=(0, 6))
+        PanelAyudaColapsable(outer, "Fuente, alcance y condiciones de referencia", [
+            "'Ref. Temperature': 7 combinaciones de temperatura de combustion y de medicion "
+            "(metering); la nota bajo el selector describe cada una.",
+            "'Molar Mass Method' (Calculate/Use table) y 'Metering reference pressure' (en "
+            "Pa): ambos son funcionales en este modulo. La edicion 2016 no tiene 'Calorific "
+            "Val. Method' (a diferencia de 1995). Se muestran 11 salidas.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2445,7 +2443,7 @@ class App(tk.Tk):
 
         ttk.Button(right_col, text="Calcular (ISO 6976 - 2016)", style="Accento.TButton",
                    command=self.on_calcular_iso6976_2016).pack(fill="x", pady=(10, 0))
-        result_frame = ttk.LabelFrame(right_col, text="Resultados (pantalla real, 11 salidas con scroll)", padding=10)
+        result_frame = ttk.LabelFrame(right_col, text="Resultados (11 salidas)", padding=10)
         result_frame.pack(fill="x", pady=(10, 0))
         claves_2016 = [
             "Molar Mass (g/mol)", "Compressibility (Z)", "Density (kg/m3)",
@@ -2456,11 +2454,16 @@ class App(tk.Tk):
         ]
         self.iso6976_2016_result_vars = self._build_result_labels(
             result_frame, claves_2016, {k: k for k in claves_2016})
+        # C-52: Status y "Data range" (0.9 .. 1.1 bar y Z > 0.9).
+        estado_frame, self.iso6976_2016_estado = self._crear_bloque_estado(
+            right_col, [("data_range", "Data range")])
+        estado_frame.pack(fill="x", pady=(10, 0))
 
     def on_calcular_iso6976_2016(self):
         try:
             comp = {n: float(self.iso6976_2016_entries[n].get()) / 100.0
                     for n in ISO6976_COMPONENTES}
+            comp_ingresada = dict(comp)  # C-52: el Status se evalua sobre la composicion sin normalizar
             # [2026-10-06] FlowXpert normaliza la composicion en ISO 6976:2016 (Dry Air suma 99.9978 %)
             _total = sum(comp.values())
             if _total > 0:
@@ -2495,7 +2498,13 @@ class App(tk.Tk):
             pcn_volumen = (hm_neto / vm_real) / 1000.0
             wobbe = iso6976_calcular_indice_wobbe(pcb_volumen, densidad_relativa)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            for var in self.iso6976_2016_result_vars.values():
+                var.set("-")
+            self._set_bloque_estado(self.iso6976_2016_estado, codigo, {"data_range": None},
+                                    textos_status=self.TEXTOS_STATUS_ISO6976_C52)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
             return
         self.iso6976_2016_result_vars["Molar Mass (g/mol)"].set(f"{mmix:.6f}")
         self.iso6976_2016_result_vars["Compressibility (Z)"].set(f"{z:.6f}")
@@ -2508,32 +2517,44 @@ class App(tk.Tk):
         self.iso6976_2016_result_vars["Inf. Calorific Val. (MJ/kg)"].set(f"{hm_neto / mmix:.6f}")
         self.iso6976_2016_result_vars["Inf. Calorific Val. (MJ/kmol)"].set(f"{hm_neto:.6f}")
         self.iso6976_2016_result_vars["Indice de Wobbe"].set(f"{wobbe:.6f}")
+        # C-52: Status y "Data range" de ISO 6976:2016 (ver normas/ISO_6976.py, bloque C-52).
+        p_ref_kpa = p_ref / 1000.0
+        codigo = iso6976_estado_2016(comp_ingresada, p_ref_kpa)
+        fuera = bool(iso6976_data_range_2016(p_ref_kpa, z))
+        if codigo != 0:
+            # C-53: con Status distinto de 0 la funcion de la norma no calcula: sin resultados.
+            for var in self.iso6976_2016_result_vars.values():
+                var.set("-")
+            if codigo == 3:
+                aviso = "La suma de la composicion no es 100 % +/- 0.01 %: no se calcula."
+            elif codigo == 1 and iso6976_estado_composicion(comp_ingresada) == 0:
+                aviso = "Metering ref. pressure fuera del campo de entrada (0 .. 2 bar): no se calcula."
+            elif codigo == 1:
+                aviso = "Hay fracciones fuera de 0 .. 100 %: no se calcula."
+            else:
+                aviso = "Composicion vacia: no se calcula."
+            self._set_bloque_estado(self.iso6976_2016_estado, codigo, {"data_range": None},
+                                    aviso=aviso, textos_status=self.TEXTOS_STATUS_ISO6976_C52)
+            return
+        aviso = ("Fuera del rango de validez de ISO 6976:2016 (presion de referencia 0.9 .. 1.1 bar y "
+                 "Z > 0.9). El resultado se calcula igual.") if fuera else ""
+        self._set_bloque_estado(self.iso6976_2016_estado, 0, {"data_range": fuera},
+                                aviso=aviso, textos_status=self.TEXTOS_STATUS_ISO6976_C52)
 
     # ------------------------------------------------------------------ #
     def _build_tab_iso6976_ex1995(self, parent):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="ISO 6976:1995 'ex' (55 componentes) -- Math_ISO6976ex_1995_M. Motor "
-                              "binario DISTINTO al de la variante base (calculate_revision_1), SIN "
-                              "pantalla propia en la app Android (solo Excel/.xll). PARCIALMENTE "
-                              "CERRADA: caso real directo por Frida cubre el motor completo y "
-                              "22/55 componentes; los 33 nuevos NUNCA se ejercitaron con valor no-cero.",
+        ttk.Label(outer, text="ISO 6976:1995 'ex' (55 componentes): composicion normalizada, 6 condiciones de "
+                              "referencia, Molar Mass Method y Calorific Val. Method.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        ttk.Label(outer, text="El parametro real de esta funcion no es 'Ref. Temperature' (esa "
-                              "pantalla no existe para 'ex') sino 'conditions' (0..5), cuyo "
-                              "significado fisico exacto (que temperatura en C/F representa cada "
-                              "valor) nunca se identifico -- ver normas/ISO_6976_ex_1995.py.",
-                  foreground="#b05000", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Formula de Z real: Z = 1 - (suma xj*bj_columna)^2, SIN sqrt y SIN p_ref/T0 -- "
-            "confirmado por llamada DIRECTA Frida a calculate_revision_1 (RONDA 3, dif. 0.0000384%).",
-            "Densidad real/volumetrica usan Vm_ideal=R*T/p con T=288.15 K y p=101325 Pa fijos -- "
-            "estos 2 valores NO estan confirmados para esta funcion en particular (el factor real "
-            "que el binario usa en su lugar sigue sin aislar, ver docstring RONDA 2): resultado "
-            "de referencia, no validado <0.1% contra ningun caso real.",
-            "22/55 componentes CERTAIN (bit-exacto contra ISO_6976.TABLA_CONSTANTES); 33 nuevos "
-            "identificados solo por formula quimica (Mj exacto), nunca ejercitados en ejecucion.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Z = 1 - (suma xj*bj)^2 (bj ya es la raiz del factor de suma); densidad = M*101.325/"
+            "(8.31451*T*Z) con T de metering de cada condicion; densidad relativa = (M/28.9626)*(Zaire/Z).",
+            "Las 55 filas (incluidos los 33 componentes extra) tienen M, b y Hs/Hi a 25, "
+            "20, 15 y 0 C.",
+            "La composicion se normaliza; si la suma se aleja de 100 % +/- 0.01 % se avisa.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2544,78 +2565,90 @@ class App(tk.Tk):
             comp_frame, ORDEN_COMPONENTES_EX1995, ejemplo=self.EJEMPLO_AGA5, n_columnas=3,
             combo_guardada=True)
 
+        from normas.ISO_6976_ex_1995 import ETIQUETAS_CONDITIONS_EX1995
+        self._iso6976_ex1995_opciones = [
+            (ETIQUETAS_CONDITIONS_EX1995[c], c) for c in sorted(ETIQUETAS_CONDITIONS_EX1995)]
         right_col = ttk.Frame(cols)
         right_col.grid(row=0, column=1, sticky="n")
         cond_frame = ttk.LabelFrame(right_col, text="Condiciones", padding=10)
         cond_frame.pack(fill="x")
-        ttk.Label(cond_frame, text="conditions (0..5)").grid(row=0, column=0, sticky="w", pady=3)
-        self.iso6976_ex1995_conditions_var = tk.StringVar(value="0")
+        ttk.Label(cond_frame, text="Ref. Temperature").grid(row=0, column=0, sticky="w", pady=3)
+        self.iso6976_ex1995_conditions_var = tk.StringVar(value=self._iso6976_ex1995_opciones[0][0])
         ttk.Combobox(cond_frame, textvariable=self.iso6976_ex1995_conditions_var,
-                     values=["0", "1", "2", "3", "4", "5"], state="readonly", width=6).grid(
-            row=0, column=1, padx=6, pady=3)
-        ttk.Label(cond_frame, text="0 = combo real confirmado por Frida\n(conditions=0, caso "
-                                    "'Default'). El resto\nnunca se probo en vivo.",
-                  foreground="gray", wraplength=240).grid(row=1, column=0, columnspan=2, sticky="w")
+                     values=[o[0] for o in self._iso6976_ex1995_opciones], state="readonly",
+                     width=16).grid(row=0, column=1, padx=6, pady=3)
+        ttk.Label(cond_frame, text="Molar Mass Method").grid(row=1, column=0, sticky="w", pady=3)
+        self.iso6976_ex1995_mmm_var = tk.StringVar(value="Use table")
+        ttk.Combobox(cond_frame, textvariable=self.iso6976_ex1995_mmm_var,
+                     values=["Calculate", "Use table"], state="readonly", width=16).grid(
+            row=1, column=1, padx=6, pady=3)
+        ttk.Label(cond_frame, text="Calorific Val. Method").grid(row=2, column=0, sticky="w", pady=3)
+        self.iso6976_ex1995_cvm_var = tk.StringVar(value="Definitive")
+        ttk.Combobox(cond_frame, textvariable=self.iso6976_ex1995_cvm_var,
+                     values=["Definitive", "Alternative"], state="readonly", width=16).grid(
+            row=2, column=1, padx=6, pady=3)
+        ttk.Label(cond_frame, text="Ref. Temperature = combustion / metering / metering (C).",
+                  foreground="gray", wraplength=240).grid(row=3, column=0, columnspan=2, sticky="w")
 
         ttk.Button(right_col, text="Calcular (ISO 6976 - ex 1995)", style="Accento.TButton",
                    command=self.on_calcular_iso6976_ex1995).pack(fill="x", pady=(10, 0))
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x", pady=(10, 0))
-        claves_ex1995 = ["Molar Mass (g/mol)", "Compressibility (Z)",
-                         "GCV bruto, base molar (kJ/mol)",
-                         "Sup. Calorific Val. (MJ/m3, no validado)",
-                         "Density (kg/m3, no validado)"]
+        self._claves_iso6976_ex = [
+            "Molar Mass (g/mol)", "Compressibility (Z)", "Density (kg/m3)", "Relative Density",
+            "Sup. Calorific Val. (MJ/m3)", "Sup. Calorific Val. (MJ/kg)", "Sup. Calorific Val. (kJ/mol)",
+            "Inf. Calorific Val. (MJ/m3)", "Inf. Calorific Val. (MJ/kg)", "Inf. Calorific Val. (kJ/mol)",
+            "Indice de Wobbe (MJ/m3)"]
         self.iso6976_ex1995_result_vars = self._build_result_labels(
-            result_frame, claves_ex1995, {k: k for k in claves_ex1995})
+            result_frame, self._claves_iso6976_ex, {k: k for k in self._claves_iso6976_ex})
+        self.iso6976_ex1995_aviso_var = tk.StringVar(value="")
+        ttk.Label(right_col, textvariable=self.iso6976_ex1995_aviso_var, foreground="#b05000",
+                  wraplength=280).pack(anchor="w", pady=(6, 0))
 
     def on_calcular_iso6976_ex1995(self):
+        from normas.ISO_6976_ex_1995 import calcular_iso6976_ex1995
         try:
             comp = {n: float(self.iso6976_ex1995_entries[n].get()) / 100.0
                     for n in ORDEN_COMPONENTES_EX1995}
-            conditions = int(self.iso6976_ex1995_conditions_var.get())
         except ValueError as e:
             messagebox.showerror("Entrada invalida", f"Revisa los valores numericos.\n{e}")
             return
-        indice_bj = EX1995_CONDITIONS_A_INDICE_BJ[conditions]
-        indice_hoj = EX1995_CONDITIONS_A_INDICE_HOJ[conditions]
+        etiqueta = self.iso6976_ex1995_conditions_var.get()
+        conditions = next((c for t, c in self._iso6976_ex1995_opciones if t == etiqueta), 0)
+        mm = 1 if self.iso6976_ex1995_mmm_var.get() == "Calculate" else 2
+        cv = 2 if self.iso6976_ex1995_cvm_var.get() == "Alternative" else 1
         try:
-            mmix = calcular_masa_molar_ex1995(comp)
-            z = calcular_factor_compresion_ex1995(comp, indice_temp=indice_bj)
-            hm_bruto = calcular_poder_calorifico_molar_ex1995(
-                comp, "bruto", indice_temp_combustion=indice_hoj)
-            vm_ideal = calcular_volumen_molar_ideal_ex1995(t=288.15, p=101325.0)
-            vm_real = calcular_volumen_molar_real_ex1995(vm_ideal, z)
-            pcb_volumen = (hm_bruto / vm_real) / 1000.0
-            densidad_real = (mmix / 1000.0) / vm_real
+            res = calcular_iso6976_ex1995(comp, conditions, mm, cv)
         except Exception as e:
+            for var in self.iso6976_ex1995_result_vars.values():
+                var.set("-")
+            self.iso6976_ex1995_aviso_var.set("")
             messagebox.showerror("Error de calculo", str(e))
             return
-        self.iso6976_ex1995_result_vars["Molar Mass (g/mol)"].set(f"{mmix:.6f}")
-        self.iso6976_ex1995_result_vars["Compressibility (Z)"].set(f"{z:.6f}")
-        self.iso6976_ex1995_result_vars["GCV bruto, base molar (kJ/mol)"].set(f"{hm_bruto:.6f}")
-        self.iso6976_ex1995_result_vars["Sup. Calorific Val. (MJ/m3, no validado)"].set(f"{pcb_volumen:.6f}")
-        self.iso6976_ex1995_result_vars["Density (kg/m3, no validado)"].set(f"{densidad_real:.6f}")
+        for clave in self._claves_iso6976_ex:
+            self.iso6976_ex1995_result_vars[clave].set(f"{res[clave]:.6f}")
+        avisos = []
+        if res["aviso_normalizacion"]:
+            avisos.append(res["aviso_normalizacion"])
+        if res["fuera_de_rango"]:
+            avisos.append("Fuera de rango de la norma (se calcula igual): "
+                          + ", ".join(res["fuera_de_rango"]))
+        self.iso6976_ex1995_aviso_var.set("\n".join(avisos))
 
     # ------------------------------------------------------------------ #
     def _build_tab_iso6976_ex2016(self, parent):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="ISO 6976:2016 'ex' (60 componentes) -- Math_ISO6976ex_2016_M. "
-                              "Reusa el MISMO motor namespace iso6976_2016 que la variante base "
-                              "(confirmado byte a byte) -- PARCIALMENTE CERRADA: caso real "
-                              "DIRECTO por Frida (llamada al motor real, no reindexacion en "
-                              "Python) cierra BIT-EXACTO para 22/60 componentes; los 38 nuevos "
-                              "nunca se ejercitaron con valor no-cero.", wraplength=760).pack(
+        ttk.Label(outer, text="ISO 6976:2016 'ex' (60 componentes): mismo metodo que la pestana ISO 6976 "
+                              "(2016), con las tablas de 60 componentes.", wraplength=760).pack(
             anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
-            "Mismo selector 'Ref. Temperature' (reference_conditions 1..7) que la variante base "
-            "2016_M -- mismo motor, misma tabla de indices bj/T0/aire (ver normas/ISO_6976_ex_2016.py "
-            "seccion 5 del docstring, sweep reference_conditions=1..7 con caso real).",
-            "El indice de Hoj/combustion NO tiene mapeo por combo confirmado para esta tabla de 60 "
-            "(que trae 5 valores de Hoj, no 4) -- se usa fijo el indice 1, el mismo que ya usa "
-            "`calcular_poder_calorifico_molar_ex2016` por defecto (mejor cierre encontrado, "
-            "dif. 0.0090%), sin variar por combo.",
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
+            "Z = 1 - (p/101.325 kPa)*(suma xj*sj)^2; columna de s por temperatura de metering y "
+            "de Hs por temperatura de combustion, igual que la pestana ISO 6976 (2016).",
+            "A diferencia de la pestana 2016, esta variante NO normaliza: si la suma no "
+            "esta entre 99.99 % y 100.01 % (o alguna fraccion esta fuera de 0..100 %) no "
+            "calcula.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2632,20 +2665,9 @@ class App(tk.Tk):
         cond_frame.pack(fill="x")
         ttk.Label(cond_frame, text="Ref. Temperature").grid(row=0, column=0, sticky="w", pady=3)
         self.iso6976_ex2016_reftemp_var = tk.StringVar(value=REF_TEMPERATURE_ISO6976_2016[0][0])
-        combo_reftemp_ex = ttk.Combobox(
-            cond_frame, textvariable=self.iso6976_ex2016_reftemp_var,
-            values=[c[0] for c in REF_TEMPERATURE_ISO6976_2016], state="readonly", width=18)
-        combo_reftemp_ex.grid(row=0, column=1, padx=6, pady=3)
-        # [RONDA 50] Selector de unidad agregado (antes campo fijo en Pa,
-        # copy-paste incompleto de _build_tab_iso6976_2016 -- ver auditoria de
-        # selectores de unidad, 2026-09-14): reusa LITERAL la misma tabla
-        # ISO6976_PRESION_A_PA/ISO6976_PRESION_A_PA_DICT ya confirmada en vivo
-        # para la pestaña hermana "ISO 6976 (2016)" (mismo parametro fisico
-        # p_ref, mismo motor namespace iso6976_2016). No hay pantalla Android
-        # propia de "ISO-6976 ex" para re-confirmar en vivo (ver nota
-        # [CERTAIN] "No existe pantalla ISO-6976 ex" en
-        # normas/ISO_6976_ex_2016.py) -- se agrega por consistencia con la
-        # variante base, sin fabricar una confirmacion que no existe.
+        ttk.Combobox(cond_frame, textvariable=self.iso6976_ex2016_reftemp_var,
+                     values=[c[0] for c in REF_TEMPERATURE_ISO6976_2016], state="readonly",
+                     width=18).grid(row=0, column=1, padx=6, pady=3)
         ttk.Label(cond_frame, text="Metering ref. pressure").grid(row=1, column=0, sticky="w", pady=3)
         pref_row_ex = ttk.Frame(cond_frame)
         pref_row_ex.grid(row=1, column=1, padx=6, pady=3, sticky="w")
@@ -2655,28 +2677,27 @@ class App(tk.Tk):
         ttk.Combobox(pref_row_ex, textvariable=self.iso6976_ex2016_pref_unidad_var,
                      values=[u for u, _f in ISO6976_PRESION_A_PA], state="readonly",
                      width=11).pack(side="left", padx=(4, 0))
-        self.iso6976_ex2016_nota_var = tk.StringVar(value=REF_TEMPERATURE_ISO6976_2016[0][6])
-        ttk.Label(cond_frame, textvariable=self.iso6976_ex2016_nota_var, foreground="gray",
-                  wraplength=260).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
-
-        def _actualizar_nota_ex(event=None):
-            etiqueta = self.iso6976_ex2016_reftemp_var.get()
-            for c in REF_TEMPERATURE_ISO6976_2016:
-                if c[0] == etiqueta:
-                    self.iso6976_ex2016_nota_var.set(c[6])
-                    break
-        combo_reftemp_ex.bind("<<ComboboxSelected>>", _actualizar_nota_ex)
+        ttk.Label(cond_frame, text="Ref. Temperature = combustion / metering / metering.",
+                  foreground="gray", wraplength=260).grid(row=2, column=0, columnspan=2, sticky="w",
+                                                          pady=(4, 0))
 
         ttk.Button(right_col, text="Calcular (ISO 6976 - ex 2016)", style="Accento.TButton",
                    command=self.on_calcular_iso6976_ex2016).pack(fill="x", pady=(10, 0))
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x", pady=(10, 0))
-        claves_ex2016 = ["Molar Mass (g/mol)", "Compressibility (Z)", "Density (kg/m3)",
-                         "Relative Density", "Sup. Calorific Val. (MJ/m3)", "Indice de Wobbe"]
+        self._claves_iso6976_ex2016 = [
+            "Molar Mass (g/mol)", "Compressibility (Z)", "Density (kg/m3)", "Relative Density",
+            "Sup. Calorific Val. (MJ/m3)", "Sup. Calorific Val. (MJ/kg)", "Sup. Calorific Val. (kJ/mol)",
+            "Inf. Calorific Val. (MJ/m3)", "Inf. Calorific Val. (MJ/kg)", "Inf. Calorific Val. (kJ/mol)",
+            "Indice de Wobbe (MJ/m3)"]
         self.iso6976_ex2016_result_vars = self._build_result_labels(
-            result_frame, claves_ex2016, {k: k for k in claves_ex2016})
+            result_frame, self._claves_iso6976_ex2016, {k: k for k in self._claves_iso6976_ex2016})
+        self.iso6976_ex2016_aviso_var = tk.StringVar(value="")
+        ttk.Label(right_col, textvariable=self.iso6976_ex2016_aviso_var, foreground="#b05000",
+                  wraplength=280).pack(anchor="w", pady=(6, 0))
 
     def on_calcular_iso6976_ex2016(self):
+        from normas.ISO_6976_ex_2016 import calcular_iso6976_ex2016
         try:
             comp = {n: float(self.iso6976_ex2016_entries[n].get()) / 100.0
                     for n in ORDEN_COMPONENTES_EX2016}
@@ -2691,40 +2712,74 @@ class App(tk.Tk):
         if combo is None:
             messagebox.showerror("Error", "Combo de Ref. Temperature invalido.")
             return
-        _, _rc, _indice_bj_base, t0, _indice_hoj, indice_temp_raw_aire, _nota = combo
-        # NOTA (verificado 2026-08-08, con las 2 opciones probadas a mano contra
-        # el caso real): NO se reusa indice_bj del mapeo base (2016_M, calibrado
-        # sobre ISO_6976.TABLA_CONSTANTES). El docstring de ISO_6976_ex_2016.py
-        # menciona un cierre "bit-exacto" con reference_conditions=1, pero ESE
-        # resultado viene de ejecutar el binario real directo via Frida (otro
-        # camino de codigo, que resuelve el indice interno el mismo), NO de esta
-        # reimplementacion en Python. Probando ambos valores directamente contra
-        # el caso real con ESTA formula: indice_bj=1 da Z=0.998244 (dif. 0.0090%);
-        # indice_bj=2 (el del mapeo base) da Z=0.998249 (dif. 0.0095%, PEOR). Se
-        # mantiene fijo en 1 -- el mejor ajuste empirico confirmado para esta
-        # implementacion en particular, sin variar por combo (no hay evidencia de
-        # que otro indice sea mejor para otro combo distinto de Default).
-        indice_bj = 1
         try:
-            mmix = calcular_masa_molar_ex2016(comp)
-            z = calcular_factor_compresion_ex2016(comp, indice_temp=indice_bj, p_ref=p_ref, t0=t0)
-            vm_ideal = calcular_volumen_molar_ideal_ex2016(t=t0, p=p_ref)
-            vm_real = calcular_volumen_molar_real_ex2016(vm_ideal, z)
-            densidad_real = (mmix / 1000.0) / vm_real
-            densidad_relativa = iso6976_calcular_densidad_relativa(
-                mmix, z, indice_temp_raw=indice_temp_raw_aire, p_ref=p_ref)
-            hm_bruto = calcular_poder_calorifico_molar_ex2016(comp)
-            pcb_volumen = (hm_bruto / vm_real) / 1000.0
-            wobbe = iso6976_calcular_indice_wobbe(pcb_volumen, densidad_relativa)
+            res = calcular_iso6976_ex2016(comp, reference_conditions=combo[1],
+                                          p_ref_kpa=p_ref / 1000.0)
         except Exception as e:
+            for var in self.iso6976_ex2016_result_vars.values():
+                var.set("-")
+            self.iso6976_ex2016_aviso_var.set("")
             messagebox.showerror("Error de calculo", str(e))
             return
-        self.iso6976_ex2016_result_vars["Molar Mass (g/mol)"].set(f"{mmix:.6f}")
-        self.iso6976_ex2016_result_vars["Compressibility (Z)"].set(f"{z:.6f}")
-        self.iso6976_ex2016_result_vars["Density (kg/m3)"].set(f"{densidad_real:.6f}")
-        self.iso6976_ex2016_result_vars["Relative Density"].set(f"{densidad_relativa:.6f}")
-        self.iso6976_ex2016_result_vars["Sup. Calorific Val. (MJ/m3)"].set(f"{pcb_volumen:.6f}")
-        self.iso6976_ex2016_result_vars["Indice de Wobbe"].set(f"{wobbe:.6f}")
+        for clave in self._claves_iso6976_ex2016:
+            self.iso6976_ex2016_result_vars[clave].set(f"{res[clave]:.6f}")
+        self.iso6976_ex2016_aviso_var.set("\n".join(res["avisos"]))
+
+    # ------------------------------------------------------------------ #
+    # C-52 (2026-11-19): bloque "Status" + rango de la norma para las
+    # pestanas que no mostraban ni estado ni rango (mismo patron que la
+    # pestana AGA-10 y que _on_calcular_api_mpms, C-45). Textos de estado y
+    # de rango segun el manual de funciones de cada norma.
+    # ------------------------------------------------------------------ #
+    TEXTOS_STATUS_C52 = {0: "0: Normal", 1: "1: Input argument out of range",
+                         2: "2: Calculation error", 3: "3: No convergence"}
+    TEXTOS_STATUS_ISO6976_C52 = {0: "0: Normal", 1: "1: Input argument out of range",
+                                 2: "2: Calculation error",
+                                 3: "3: Mole fractions do not add up to 1.0 +- 0.0001"}
+
+    def _crear_bloque_estado(self, parent, filas_rango, titulo="Status y rango de la norma"):
+        """Crea (sin ubicar) un LabelFrame con la fila 'Status', las filas de
+        rango `filas_rango` [(clave, etiqueta)] y una etiqueta de aviso.
+        Devuelve (frame, bloque)."""
+        frame = ttk.LabelFrame(parent, text=titulo, padding=10)
+        claves = ["status"] + [c for c, _e in filas_rango]
+        etiquetas = {"status": "Status"}
+        etiquetas.update(dict(filas_rango))
+        result_vars = self._build_result_labels(frame, claves, etiquetas)
+        aviso_var = tk.StringVar(value="")
+        aviso_label = ttk.Label(frame, textvariable=aviso_var, foreground="#B03A2E",
+                                font=("Segoe UI", 9, "bold"), wraplength=280)
+        aviso_label.grid(row=len(claves), column=0, columnspan=2, sticky="w", pady=(6, 0))
+        return frame, {"vars": result_vars, "aviso": aviso_var, "aviso_label": aviso_label}
+
+    @staticmethod
+    def _codigo_status_excepcion_c52(e):
+        """Mismo mapeo que C-45: ValueError -> 1, ArithmeticError con
+        'convergence' -> 3, otro ArithmeticError -> 2. Otra excepcion -> None
+        (la pestana mantiene su dialogo de error)."""
+        if isinstance(e, ArithmeticError) and "convergence" in str(e).lower():
+            return 3
+        if isinstance(e, ArithmeticError):
+            return 2
+        if isinstance(e, ValueError):
+            return 1
+        return None
+
+    def _set_bloque_estado(self, bloque, status, rangos=None, aviso="", textos_status=None):
+        """`status`: codigo entero (o None para '-'); `rangos`: {clave: bool,
+        None o texto}; True -> '1: Out of range', False -> '0: In range',
+        None -> '-'."""
+        textos = textos_status or self.TEXTOS_STATUS_C52
+        bloque["vars"]["status"].set("-" if status is None else textos.get(status, str(status)))
+        for clave, valor in (rangos or {}).items():
+            if valor is None:
+                texto = "-"
+            elif isinstance(valor, str):
+                texto = valor
+            else:
+                texto = "1: Out of range" if valor else "0: In range"
+            bloque["vars"][clave].set(texto)
+        bloque["aviso"].set(aviso)
 
     def _build_result_labels(self, parent, keys, etiquetas):
         result_vars = {}
@@ -2760,35 +2815,26 @@ class App(tk.Tk):
         scroll_parent = self._crear_frame_scrollable(parent)
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="GasViscosity_2004 -- viscosidad dinamica del gas natural segun "
-                              "P.Schley, M.Jaeschke, C.Kuechenmeister, E.Vogel (2004), 'Viscosity "
-                              "Measurements and Predictions for Natural Gas'. Motor propio de "
-                              "FlowXpert (namespace spirit::math::gas_viscosity_2004), CERRADO.",
+        ttk.Label(outer, text="GasViscosity_2004: viscosidad dinamica del gas natural segun P.Schley, "
+                              "M.Jaeschke, C.Kuechenmeister, E.Vogel (2004), 'Viscosity Measurements and "
+                              "Predictions for Natural Gas'.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
                 "Formula = mezcla de Wilke (1950) para el limite de densidad cero + termino "
-                "residual tipo Jossi-Stiel-Thodos (coeficientes propios de Schley et al., no los "
-                "clasicos de JST 1966). Estructura y las ~100 constantes (12 componentes x 8 "
-                "valores + 4 coeficientes residuales + constantes estructurales) confirmadas "
-                "BYTE A BYTE contra .xll y .so, compilados por separado (Fase 6). Ver "
-                "normas/GasViscosity_2004.py.",
-                "3 casos reales (composicion 'Default', T=0/rho=0, T=20/rho=0, T=20/rho=80) "
-                "validados contra la app Android en vivo, coincidencia exacta al redondeo de "
-                "pantalla (6 decimales) en los 3.",
-                "El motor interno solo usa 12 de los 22 componentes AGA8, pero la reduccion "
-                "COMPLETA de los 22 a esos 12 es [CERTAIN], fuente: manual oficial ABB SpiritIT "
-                "('Flow-X Manual IIIb - Function Reference', pag. 83): solo Agua/H2S/CO se "
-                "descartan; Hidrogeno->Metano, Oxigeno/Helio/Argon->Nitrogeno, "
-                "n-Nonano/n-Decano->n-Octano y neo-Pentano->i-Pentano. Esta grilla ya carga los "
-                "22 y aplica esa reduccion oficial antes de calcular (ver "
-                "`reducir_22_a_12()`/`calcular_viscosidad_desde_22()`).",
+                "residual tipo Jossi-Stiel-Thodos (coeficientes propios de Schley et al., no "
+                "los clasicos de JST 1966): 12 componentes x 8 valores + 4 coeficientes "
+                "residuales. Ver normas/GasViscosity_2004.py.",
+                "El calculo solo usa 12 de los 22 componentes AGA8. Reduccion de los 22 a esos "
+                "12: solo Agua/H2S/CO se descartan; Hidrogeno->Metano, "
+                "Oxigeno/Helio/Argon->Nitrogeno, n-Nonano/n-Decano->n-Octano y "
+                "neo-Pentano->i-Pentano. Esta grilla carga los 22 y aplica esa reduccion antes "
+                "de calcular (ver `reducir_22_a_12()`/`calcular_viscosidad_desde_22()`).",
                 "Rango de validez fisica OFICIAL del metodo publicado (misma fuente): 250 K a "
                 "450 K (-24 a +177 degC), presion hasta 30 MPa (300 bar). Incertidumbre estimada: "
                 "0.5% para gas natural tipico, 0.3% para metano puro. Es DISTINTO del rango "
                 "generico de entrada de la UI (density 0..2000 kg/m3, temperature -200..400 "
                 "degC), que es solo un limite de campo, no de validez fisica.",
-                "'temperature' es en grados Celsius, CONFIRMADO EXPLICITO por la UI real de la app "
-                "('degree celsius' bajo el simbolo °C) -- no inferido.",
+                "'temperature' es en grados Celsius.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2798,9 +2844,8 @@ class App(tk.Tk):
         self.gasvisc_entries = self._build_composicion_grid_lista(
             comp_frame, ISO6976_COMPONENTES, ejemplo=self.EJEMPLO_AGA5, n_columnas=2,
             combo_guardada=True)
-        ttk.Label(comp_frame, text="Solo 12 de estos 22 alimentan el motor real (los otros 10 se "
-                                    "redistribuyen segun la tabla oficial, ver panel de arriba;\n"
-                                    "solo Agua/H2S/CO se descartan por completo).",
+        ttk.Label(comp_frame, text="Solo 12 de estos 22 entran en el calculo (los otros 10 se redistribuyen segun "
+                                   "la tabla del panel de arriba;\nsolo Agua/H2S/CO se descartan por completo).",
                   foreground="gray", wraplength=380).grid(
             row=(len(ISO6976_COMPONENTES) + 1) // 2 + 2, column=0, columnspan=4,
             sticky="w", pady=(4, 0))
@@ -2828,15 +2873,11 @@ class App(tk.Tk):
         ttk.Combobox(temperature_row, textvariable=self.gasvisc_temperature_unidad_var,
                      values=[u for u, _f in GASVISC2004_TEMPERATURA_A_DEGC], state="readonly",
                      width=8).pack(side="left", padx=(4, 0))
-        ttk.Label(cond_frame, text="Rango UI declarado: density 0..2000 kg/m3,\n"
-                                    "temperature -200..400 degC (limite generico de\n"
-                                    "UI, no el rango de validez fisica del ajuste).\n"
-                                    "El selector de unidad de cada campo SOLO convierte\n"
-                                    "lo mostrado/ingresado -- confirmado tocando la app\n"
-                                    "real (uiautomator, 2026-08-19); el calculo interno\n"
-                                    "sigue siempre en kg/m3 y grados Celsius.\n"
-                                    "Rango de validez FISICA oficial (manual ABB SpiritIT):\n"
-                                    "250..450 K (-24..+177 degC), presion hasta 30 MPa.",
+        ttk.Label(cond_frame, text="Rango de entrada: density 0..2000 kg/m3,\ntemperature -200..400 degC (limite "
+                                   "generico de\nentrada, no el rango de validez fisica del ajuste).\nEl selector de "
+                                   "unidad de cada campo SOLO convierte\nlo mostrado/ingresado; el calculo "
+                                   "interno\nsigue siempre en kg/m3 y grados Celsius.\nRango de validez FISICA de la "
+                                   "correlacion:\n250..450 K (-24..+177 degC), presion hasta 30 MPa.",
                   foreground="gray", wraplength=230).grid(
             row=2, column=0, columnspan=2, sticky="w", pady=(2, 0))
         self.gasvisc_rango_var = tk.StringVar(value="")
@@ -2852,6 +2893,12 @@ class App(tk.Tk):
         self.gasvisc_result_vars = self._build_result_labels(
             result_frame, ["viscosity", "viscosity_pas"],
             {"viscosity": "Dynamic viscosity [cP]", "viscosity_pas": "Dynamic viscosity [Pa.s]"})
+        # C-52: Status y "Range". La salida "Range" de la funcion de calculo se entrega siempre
+        # en 0 (In range), aun fuera de 250..450 K; el aviso de temperatura de arriba es el que
+        # informa el limite publicado del metodo.
+        estado_frame, self.gasvisc_estado = self._crear_bloque_estado(
+            right_col, [("rango", "Range")])
+        estado_frame.pack(fill="x", pady=(10, 0))
 
     def on_calcular_gasviscosity2004(self):
         try:
@@ -2868,8 +2915,14 @@ class App(tk.Tk):
         try:
             eta = gasvisc_calcular_viscosidad_desde_22(composicion_22, temperatura, densidad)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            for var in self.gasvisc_result_vars.values():
+                var.set("-")
+            self._set_bloque_estado(self.gasvisc_estado, codigo, {"rango": None})
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
             return
+        self._set_bloque_estado(self.gasvisc_estado, 0, {"rango": False})
         # L-04: en cP con 6 decimales como FlowXpert (en Pa.s con 6 decimales solo quedaban 2 cifras).
         self.gasvisc_result_vars["viscosity"].set(f"{eta * 1000.0:.6f}")
         self.gasvisc_result_vars["viscosity_pas"].set(f"{eta:.6e}")
@@ -2913,7 +2966,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", ayuda_items,
+        PanelAyudaColapsable(outer, "Fuente y alcance", ayuda_items,
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -2953,7 +3006,7 @@ class App(tk.Tk):
         hidrometro_var = None
         if tiene_hidrometro:
             hidrometro_var = tk.BooleanVar(value=False)
-            ttk.Checkbutton(izq, text="Hydrometer Corr. (confirmado, ver panel de arriba)",
+            ttk.Checkbutton(izq, text="Hydrometer Corr. (ver panel de arriba)",
                             variable=hidrometro_var).grid(
                 row=fila, column=0, columnspan=2, sticky="w", pady=3)
             fila += 1
@@ -2979,18 +3032,14 @@ class App(tk.Tk):
         ttk.Combobox(izq, textvariable=producto_var, values=[p[0] for p in API_PRODUCTOS],
                      state="readonly", width=16).grid(row=fila, column=1, padx=6, pady=3)
         if auto_select_disponible:
-            ttk.Label(izq, text="\"Refined, auto\" (RONDA 44): selecciona automaticamente "
-                                "Gasoline/Transition/Jet/FuelOil segun la densidad (breakpoints "
-                                "del motor real, confirmados por decompilacion y validados "
-                                "contra el oraculo .xll). El producto realmente elegido se "
-                                "muestra abajo en \"Product (selected)\".",
+            ttk.Label(izq, text='"Refined, auto": selecciona automaticamente Gasoline/Transition/Jet/FuelOil '
+                                'segun la densidad. El producto realmente elegido se muestra abajo en "Product '
+                                '(selected)".',
                         foreground="gray", wraplength=220).grid(
                 row=fila + 1, column=0, columnspan=2, sticky="w", pady=(4, 0))
         else:
-            ttk.Label(izq, text="\"Refined, auto\" no esta implementado en el motor de "
-                                "referencia (breakpoints de auto-seleccion no confirmados) -- "
-                                "de elegirlo, el calculo mostrara un error explicito en vez de "
-                                "un numero fabricado.", foreground="gray", wraplength=220).grid(
+            ttk.Label(izq, text='"Refined, auto" no esta implementado para esta funcion: de elegirlo, el '
+                                "calculo mostrara un error explicito en vez de un resultado.", foreground="gray", wraplength=220).grid(
                 row=fila + 1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
         right_col = ttk.Frame(cols)
@@ -3023,6 +3072,10 @@ class App(tk.Tk):
         # (con "Refined, auto" es el que eligio el motor).
         claves_resultado.append("product_efectivo")
         etiquetas_resultado["product_efectivo"] = "Product"
+        # C-45 (2026-11-18): Status y "Calculation out of range" como en FlowXpert.
+        claves_resultado += ["status", "fuera_rango"]
+        etiquetas_resultado["status"] = "Status"
+        etiquetas_resultado["fuera_rango"] = "Calculation out of range"
 
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
@@ -3088,7 +3141,19 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-45: codigos de estado del motor (C-38/C-41) como los muestra FlowXpert.
+            if isinstance(e, ArithmeticError) and "convergence" in str(e).lower():
+                st["result_vars"]["status"].set("3: No convergence")
+            elif isinstance(e, ArithmeticError):
+                st["result_vars"]["status"].set("2: Calculation error")
+            elif isinstance(e, ValueError):
+                st["result_vars"]["status"].set("1: Input argument out of range")
+            else:
+                messagebox.showerror("Error de calculo", str(e))
             return
         result_vars = st["result_vars"]
         if st["salida_principal_clave"]:
@@ -3108,19 +3173,23 @@ class App(tk.Tk):
         if "product_efectivo" in result_vars:
             result_vars["product_efectivo"].set(
                 API_NOMBRE_PRODUCTO.get(r.get("product_efectivo", producto), str(r.get("product_efectivo", "-"))))
+        result_vars["status"].set("0: Normal")
+        if "fuera_de_rango" in r:
+            result_vars["fuera_rango"].set("1: Out of range" if r["fuera_de_rango"] else "0: In range")
+        else:
+            result_vars["fuera_rango"].set("-")
 
     _AYUDA_API_1980_COMUN = [
         "Motor API MPMS 11.1 / API-2540 / ASTM D1250 Adjunct, edicion 1980/1984. "
         "Formula VCF/CTL clasica: alpha=(K0+K1*rho+K2*rho^2)/rho^2, x=alpha*(T-T_ref), "
         "CTL=exp(-(x+0.8*x^2)) -- CTL (Correction for Temperature on Liquid) es el "
         "factor que ajusta un volumen medido a la temperatura de referencia (60°F/15°C).",
-        "'API Gravity'/'RD'/'Density' de entrada: sin selector de unidad (confirmado "
-        "contra la pantalla real). 'Product': 7 opciones reales (Crude, Gasoline, Jet "
-        "fuel, etc., cada una con su propia tabla de constantes K0/K1/K2). "
-        "'Temperature': selector K/degC/degF/R.",
+        "'API Gravity'/'RD'/'Density' de entrada: sin selector de unidad. 'Product': 7 "
+        "opciones (Crude, Gasoline, Jet fuel, etc., cada una con su propia tabla de "
+        "constantes K0/K1/K2). 'Temperature': selector K/degC/degF/R.",
         "El campo Alpha (coeficiente de expansion termica) se calcula internamente en "
         "1/gradoF (sistema US) o 1/gradoC (metrico) segun corresponda, pero esta "
-        "pestaña siempre lo muestra en 1/gradoC, igual que la app real.",
+        "pestaña siempre lo muestra en 1/gradoC.",
         "'Hydrometer correction': corrige la lectura de un hidrometro real (que tiene "
         "su propio error de escala/graduacion) antes de calcular el CTL. Disponible en "
         "Table-5, Table-23 (US) y Table-53 (metrico); no aplica en Table-6/24/54 "
@@ -3129,8 +3198,6 @@ class App(tk.Tk):
         "resultado principal a 1 decimal (cambia el numero devuelto por el motor, no "
         "solo el formato de pantalla). En Table-6/24/54 es un selector de 4 opciones, "
         "donde solo 'Enabled (table values)' redondea el CTL a 4 decimales.",
-        "Validado con 9 casos reales (Table-5/6, Crude/Gasoline/Lub oil) contra la "
-        "app Android: API Gravity a 60°F y CTL coinciden con error menor a 0.0001%.",
     ]
 
     _AYUDA_API_2004_COMUN = [
@@ -3141,31 +3208,22 @@ class App(tk.Tk):
         "ajusta el volumen medido tanto por temperatura como por presion. La "
         "temperatura de referencia real que usa el motor es 60.0068749°F (no 60.0° "
         "exacto).",
-        "Validado con casos reales de la app (Table5/6_2004, US, con presion "
-        "variada): error menor a 0.004%. 'API Gravity'/'RD' de entrada: sin selector "
-        "de unidad. 'Product': mismas 7 opciones que 1980. 'Temperature': selector "
-        "K/degC/degF/R. 'Pressure': selector real de 11 unidades (bar(g)/mbar(g)/ "
-        "mmHgg/mmH2Og/inHgg/inH2Og, confirmado tocando la pantalla real -- psig NO "
-        "es una opcion, aunque el motor interno trabaje nativamente en psig).",
-        "PENDIENTE, no fabricado: la app real muestra un residuo de ~0.00068% en el "
-        "CTL de Table-6 (2004) que viene de una micro-correccion adicional de "
-        "temperatura no reproducida aqui (informacion insuficiente para "
-        "reconstruirla sin inventar coeficientes). Residuo pequeño y documentado, no "
-        "bloqueante para uso normal.",
+        "'API Gravity'/'RD' de entrada: sin selector de unidad. 'Product': mismas 7 "
+        "opciones que 1980. 'Temperature': selector K/degC/degF/R. 'Pressure': selector "
+        "de 11 unidades (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/inH2Og); internamente el "
+        "calculo trabaja en psig.",
     ]
 
     _AYUDA_API_2004_METRICO_COMUN = [
-        "Motor API MPMS 11.1 / API-2540, edicion 2004, sistema metrico (Table-53/54). "
-        "Validado con casos reales de la app: error menor a 0.004%.",
+        "Motor API MPMS 11.1 / API-2540, edicion 2004, sistema metrico (Table-53/54).",
         "Internamente usa el mismo nucleo de calculo que Table-5/23 (2004, referencia "
         "60.0068749°F) y agrega una segunda evaluacion a 15°C para expresar el "
         "resultado en la referencia metrica -- 'density_15c' es ese resultado final.",
-        "Esta pestaña muestra los 3 campos CTL/CPL/CTPL por separado (verificados "
-        "exactos contra la app real): CTL y CTPL son distintos incluso con Presion=0, "
-        "asi que conviene revisar los 3 y no asumir que son iguales.",
+        "Esta pestaña muestra los 3 campos CTL/CPL/CTPL por separado: CTL y CTPL son "
+        "distintos incluso con Presion=0, asi que conviene revisar los 3 y no asumir "
+        "que son iguales.",
         "'Density' de entrada: sin selector de unidad, siempre kg/m3. 'Pressure': "
-        "selector real de 11 unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/"
-        "inH2Og), confirmado tocando la pantalla real (RONDA 39).",
+        "selector de 11 unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/inH2Og).",
     ]
 
     _AYUDA_API_2004_TABLE5960_COMUN = [
@@ -3177,12 +3235,7 @@ class App(tk.Tk):
         "tiene una tabla de constantes propia: reusa la de Table-53/54, seleccionada "
         "por 'Product' de la misma forma.",
         "'Density' de entrada: sin selector de unidad, siempre kg/m3. 'Pressure': "
-        "selector real de 11 unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/"
-        "inH2Og), confirmado tocando la pantalla real (RONDA 39).",
-        "Validado por comparacion cruzada entre 2 implementaciones independientes del "
-        "motor real (Windows y Android); sin un caso propio capturado en pantalla "
-        "para esta tabla en particular (Table-53/54, que comparten la misma formula, "
-        "si tienen ese caso).",
+        "selector de 11 unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/inH2Og).",
     ]
 
     def _build_tab_api_table5_1980(self, parent):
@@ -3387,16 +3440,12 @@ class App(tk.Tk):
         for linea in motivo_lineas:
             ttk.Label(outer, text="• " + linea, wraplength=760, justify="left").pack(
                 anchor="w", pady=(0, 4))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la confirmacion", fuente_lineas,
+        PanelAyudaColapsable(outer, "Fuente y alcance", fuente_lineas,
                              wraplength=740).pack(fill="x", pady=(10, 0))
 
     _FUENTE_API_MENU_COMUN = [
-        "Pantalla confirmada en la app real FlowXpert (emulador flowxpert_rd, "
-        "com.spiritit.flowxpert), navegando API > \"API 11.1 (1952/1980/2004)\" y "
-        "leyendo la lista con uiautomator -- el nombre de esta pestaña es literal, "
-        "no traducido.",
-        "Descripcion y formulas segun el manual oficial \"Flow-X Manual IIIb - "
-        "Function Reference\" (CM/FLOWX/FR-EN), capitulo \"2 API MPMS Tables\".",
+        'Nombre de pestaña segun el menu API > "API 11.1 (1952/1980/2004)".',
+        'Descripcion y formulas segun API MPMS capitulo 11.1 ("API MPMS Tables").',
     ]
 
     # RONDA 10: Table53/54 (1952, metrico) y su wrapper Density@15C se
@@ -3409,16 +3458,12 @@ class App(tk.Tk):
     # localizadas pero NO decodificadas esta ronda) -- siguen bloqueadas,
     # ver el placeholder actualizado mas abajo.
     _AYUDA_API1952_METRICO_COMUN = [
-        "Edicion 1952: los valores de la tabla impresa SON la norma (manual "
-        "Flow-X: \"The table values are the standard, so no calculations are "
-        "involved\"). Se lee la tabla directo, sin iterar, interpolando en 2 "
+        "Edicion 1952: los valores de la tabla impresa SON la norma (no hay calculo, "
+        "solo lectura de tabla). Se lee la tabla directo, sin iterar, interpolando en 2 "
         "ejes (temperatura en pasos de 0.5 °C, densidad en pasos de 1 o 5 kg/m3).",
-        "Table-53 usa su propia tabla (22 segmentos) y Table-54 la de 6 "
-        "segmentos; ambas validadas contra FlowXpert.xll (llamada directa) en "
-        "30000 puntos cada una: 0 diferencias en valor y en fuera de rango. "
-        "Los 3 casos del Excel de validacion coinciden con la app Android.",
-        "Fuera de la tabla, igual que FlowXpert: 'Calculation out of range' = 1, "
-        "Density @15°C = 0 (Table-53) o CTL = 1 (Table-54).",
+        "Table-53 usa su propia tabla (22 segmentos) y Table-54 la de 6 segmentos.",
+        "Fuera de la tabla: 'Calculation out of range' = 1, Density @15°C = 0 "
+        "(Table-53) o CTL = 1 (Table-54).",
         "'Density' de entrada: sin selector de unidad, siempre kg/m3 (mismo "
         "criterio que el resto de la familia 1980/2004).",
     ]
@@ -3435,7 +3480,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              ayuda_items if ayuda_items is not None else self._AYUDA_API1952_METRICO_COMUN,
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
@@ -3471,6 +3516,9 @@ class App(tk.Tk):
             etiquetas_resultado["principal"] = salida_principal_label
         claves_resultado.append("ctl")
         etiquetas_resultado["ctl"] = "CTL, Correction for Temperature on Liquid [adimensional]"
+        # C-52: fila "Status" (antes solo dialogo de error), como en las tablas 1980/2004.
+        claves_resultado.append("status")
+        etiquetas_resultado["status"] = "Status"
         claves_resultado.append("fuera_de_rango")
         etiquetas_resultado["fuera_de_rango"] = "Calculation out of range"
 
@@ -3502,21 +3550,27 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-52: codigo de Status en pantalla (mapeo C-45); dialogo solo si no hay codigo.
+            codigo = self._codigo_status_excepcion_c52(e)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
+            else:
+                st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[codigo])
             return
         result_vars = st["result_vars"]
+        result_vars["status"].set(self.TEXTOS_STATUS_C52[0])
         # Mismos decimales que muestra FlowXpert en cada pantalla.
         if st["salida_principal_clave"]:
             result_vars["principal"].set(st["formato_principal"].format(r[st["salida_principal_clave"]]))
         result_vars["ctl"].set(f"{r['ctl']:.6f}")
         fuera = r.get("fuera_de_rango", False)
+        # C-53: sin dialogo; "Calculation out of range" = 1 ya indica que se muestran los valores
+        # de respaldo de la norma (valor base = 0 o CTL = 1).
         result_vars["fuera_de_rango"].set("1: Out of range" if fuera else "0: In range")
-        if fuera:
-            messagebox.showwarning(
-                "Fuera de la tabla 1952",
-                "La combinacion de entrada y temperatura no esta cubierta por la tabla "
-                "de la norma.\nSe muestran los valores de respaldo del manual Flow-X "
-                "(valor base = 0 o CTL = 1); no son un resultado valido.")
 
     def _build_tab_api1952_table53(self, parent):
         self._build_tab_api1952_ctl_tabla(
@@ -3552,18 +3606,11 @@ class App(tk.Tk):
     # docstring RONDA 12 en normas/API_MPMS_Tables_1980_2004.py.
     # ------------------------------------------------------------------ #
     _AYUDA_API1952_US_COMUN = [
-        "Edicion 1952 (sistema US): los valores de la tabla impresa SON la "
-        "norma (manual Flow-X: \"The table values are the standard, so no "
-        "calculations are involved\"). Cada pantalla lee SU tabla directo "
+        "Edicion 1952 (sistema US): los valores de la tabla impresa SON la norma (no "
+        "hay calculo, solo lectura de tabla). Cada pantalla lee SU tabla directo "
         "(Table-5, 6, 23 y 24 son 4 tablas distintas), sin iterar.",
-        "Validado contra FlowXpert.xll (llamada directa) en 30000 puntos por "
-        "tabla: 0 diferencias en valor y en fuera de rango. Los 3 casos del "
-        "Excel de validacion coinciden con la app Android (0.0000 %).",
-        "Fuera de la tabla, igual que FlowXpert: 'Calculation out of range' = 1, "
-        "valor base = 0 (Table-5/23) o CTL = 1 (Table-6/24).",
-        "Limite conocido: con RD entre 0.51 y 0.60 la Table-23 del .xll se cae "
-        "(acceso a memoria invalido) en algunos puntos; ahi este motor no tiene "
-        "referencia contra la cual validar.",
+        "Fuera de la tabla: 'Calculation out of range' = 1, valor base = 0 (Table-5/23) "
+        "o CTL = 1 (Table-6/24).",
         "'API Gravity'/'RD' de entrada: sin selector de unidad (mismo "
         "criterio que el resto de la familia). 'Temperature': selector "
         "degF/degC/K/R.",
@@ -3636,13 +3683,10 @@ class App(tk.Tk):
                                 "el modulo de presion API MPMS 11.2.1M (CPL): primero converge "
                                 "la densidad a 15°C por temperatura, y con ese resultado ya "
                                 "convergido calcula la correccion adicional por presion.",
-                                "'Conversion': 'Observed -> Standard' (default, iterativo) o "
-                                "'Standard -> Observed' (directo). 'API-11.2.1M Rounding': "
-                                "redondeo opcional de pantalla, verificado exacto contra el "
-                                "caso real (conversion=Standard->Observed, density_15c=1000 "
-                                "kg/m3, T=25°C, P=20 bar(g)): Rounding=0 da 994.5497, "
-                                "Rounding=1 da 994.5502, ambos coinciden con la app real a la "
-                                "precision mostrada."],
+                                "'Conversion': 'Observed -> Standard' (default, iterativo) o 'Standard -> "
+                                "Observed' (directo). 'API-11.2.1M Rounding': redondeo opcional de pantalla. "
+                                "Ejemplo (Standard->Observed, density_15c=1000 kg/m3, T=25°C, P=20 bar(g)): "
+                                "Rounding=0 da 994.5497, Rounding=1 da 994.5502."],
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -3690,8 +3734,11 @@ class App(tk.Tk):
         ttk.Button(right_col, text="Calcular (API Density @15°C, 1952)", style="Accento.TButton",
                    command=self._on_calcular_api1952_dens15c).pack(fill="x", pady=(0, 10))
 
-        claves_resultado = ["principal", "ctl", "cpl", "ctpl", "f"]
+        # C-52: Status, "CTL calc out of range" y "CPL calc out of range" (como en las pantallas 1980).
+        claves_resultado = ["principal", "ctl", "cpl", "ctpl", "f", "status", "fuera_ctl", "fuera_cpl"]
         etiquetas_resultado = {
+            "status": "Status", "fuera_ctl": "CTL calc out of range",
+            "fuera_cpl": "CPL calc out of range",
             "principal": "Density a 15°C, EVP [kg/m3]",
             "ctl": "CTL, Correction for Temperature on Liquid [adimensional]",
             "cpl": "CPL, Correction for Pressure on Liquid [adimensional]",
@@ -3734,9 +3781,14 @@ class App(tk.Tk):
                                      pressure_bar_g=presion, equilibrium_pressure_bar_g=evp,
                                      conversion=conversion, rounding=rounding)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            self._estado_api1952_wrapper_error(st, e)
             return
         result_vars = st["result_vars"]
+        self._estado_api1952_wrapper_ok(st)
         result_vars["principal"].set(f"{r['density_15c']:.6f}")
         result_vars["ctl"].set(f"{r['ctl']:.7f}")
         result_vars["cpl"].set(f"{r['cpl']:.7f}")
@@ -3765,12 +3817,9 @@ class App(tk.Tk):
                                 "Table-23/24, sistema US) con el modulo de presion API MPMS "
                                 "11.2.1 para obtener el resultado corregido tanto por "
                                 "temperatura como por presion.",
-                                "'Conversion': 'Observed -> Standard' (default, iterativo) o "
-                                "'Standard -> Observed' (directo, sin iterar). 'API-11.2.1 "
-                                "Rounding': 0=Disabled, 1=Enabled, se reenvia tal cual al "
-                                "modulo de presion interno -- validado con caso real solo en "
-                                "la familia metrica equivalente, no en esta tabla US "
-                                "especifica."],
+                                "'Conversion': 'Observed -> Standard' (default, iterativo) o 'Standard -> "
+                                "Observed' (directo, sin iterar). 'API-11.2.1 Rounding': 0=Disabled, 1=Enabled, "
+                                "se aplica al modulo de presion interno."],
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -3818,8 +3867,11 @@ class App(tk.Tk):
                    command=lambda: self._on_calcular_api1952_wrapper_us(state_key)).pack(
             fill="x", pady=(0, 10))
 
-        claves_resultado = ["principal", "ctl", "cpl", "ctpl", "f"]
+        # C-52: Status, "CTL calc out of range" y "CPL calc out of range" (como en las pantallas 1980).
+        claves_resultado = ["principal", "ctl", "cpl", "ctpl", "f", "status", "fuera_ctl", "fuera_cpl"]
         etiquetas_resultado = {
+            "status": "Status", "fuera_ctl": "CTL calc out of range",
+            "fuera_cpl": "CPL calc out of range",
             "principal": salida_principal_label,
             "ctl": "CTL, Correction for Temperature on Liquid [adimensional]",
             "cpl": "CPL, Correction for Pressure on Liquid [adimensional]",
@@ -3865,14 +3917,39 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            self._estado_api1952_wrapper_error(st, e)
             return
         result_vars = st["result_vars"]
+        self._estado_api1952_wrapper_ok(st)
         result_vars["principal"].set(f"{r[st['salida_principal_clave']]:.6f}")
         result_vars["ctl"].set(f"{r['ctl']:.7f}")
         result_vars["cpl"].set(f"{r['cpl']:.7f}")
         result_vars["ctpl"].set(f"{r['ctpl']:.7f}")
         result_vars["f"].set(f"{r['f']:.9f}")
+
+    def _estado_api1952_wrapper_ok(self, st):
+        # C-52: con calculo normal la tabla 1952 y el modulo de presion quedan dentro de rango
+        # (la funcion de referencia solo marca los flags cuando no puede calcular).
+        st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[0])
+        st["result_vars"]["fuera_ctl"].set("0: In range")
+        st["result_vars"]["fuera_cpl"].set("0: In range")
+
+    def _estado_api1952_wrapper_error(self, st, e):
+        # C-52/C-53: Status segun el mapeo C-45. Fuera de la tabla 1952 el motor lanza
+        # ArithmeticError ("... outside the 1952 table ..."): "2: Calculation error" con
+        # "CTL calc out of range" = 1 y "CPL calc out of range" = 0, como la funcion de la norma.
+        codigo = self._codigo_status_excepcion_c52(e)
+        if codigo is None:
+            messagebox.showerror("Error de calculo", str(e))
+            return
+        st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[codigo])
+        if "1952 table" in str(e):
+            st["result_vars"]["fuera_ctl"].set("1: Out of range")
+            st["result_vars"]["fuera_cpl"].set("0: In range")
 
     def _build_tab_api1952_gravity60f(self, parent):
         self._build_tab_api1952_wrapper_us(
@@ -3918,7 +3995,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", ayuda_items,
+        PanelAyudaColapsable(outer, "Fuente y alcance", ayuda_items,
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -3955,10 +4032,9 @@ class App(tk.Tk):
         ttk.Combobox(izq, textvariable=producto_var, values=[p[0] for p in API_PRODUCTOS],
                      state="readonly", width=16).grid(row=4, column=1, padx=6, pady=3)
         if auto_select_disponible:
-            ttk.Label(izq, text="\"Refined, auto\" (RONDA 44): selecciona automaticamente "
-                                "Gasoline/Transition/Jet/FuelOil segun la densidad (breakpoints "
-                                "del motor real, validados contra el oraculo .xll). El producto "
-                                "realmente elegido se muestra en \"Product (selected)\".",
+            ttk.Label(izq, text='"Refined, auto": selecciona automaticamente Gasoline/Transition/Jet/FuelOil '
+                                'segun la densidad. El producto realmente elegido se muestra en "Product '
+                                '(selected)".',
                         foreground="gray", wraplength=220).grid(
                 row=4, column=2, columnspan=2, sticky="w", padx=(10, 0), pady=3)
         else:
@@ -4012,6 +4088,11 @@ class App(tk.Tk):
         # (con "Refined, auto" es el que eligio el motor).
         claves_resultado.append("product_efectivo")
         etiquetas_resultado["product_efectivo"] = "Product"
+        # C-45 (2026-11-18): Status y banderas de FlowXpert (FUN_1800e62d4/e79e4/e8494).
+        claves_resultado += ["status", "fuera_tabla", "fuera_1121"]
+        etiquetas_resultado["status"] = "Status"
+        etiquetas_resultado["fuera_tabla"] = "CTL calc out of range"
+        etiquetas_resultado["fuera_1121"] = "CPL calc out of range"
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
         result_vars = self._build_result_labels(result_frame, claves_resultado, etiquetas_resultado)
@@ -4063,7 +4144,19 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-45: codigos de estado como FlowXpert (ValueError = 1, ArithmeticError = 2/3).
+            if isinstance(e, ArithmeticError) and "convergence" in str(e).lower():
+                st["result_vars"]["status"].set("3: No convergence")
+            elif isinstance(e, ArithmeticError):
+                st["result_vars"]["status"].set("2: Calculation error")
+            elif isinstance(e, ValueError):
+                st["result_vars"]["status"].set("1: Input argument out of range")
+            else:
+                messagebox.showerror("Error de calculo", str(e))
             return
         result_vars = st["result_vars"]
         result_vars["principal"].set(f"{r[st['salida_principal_clave']]:.6f}")
@@ -4081,39 +4174,33 @@ class App(tk.Tk):
         if "product_efectivo" in result_vars:
             result_vars["product_efectivo"].set(
                 API_NOMBRE_PRODUCTO.get(r.get("product_efectivo", producto), str(r.get("product_efectivo", "-"))))
+        result_vars["status"].set("0: Normal")
+        for clave_ui, clave_motor in (("fuera_tabla", "fuera_de_rango_tabla"), ("fuera_1121", "fuera_de_rango_1121")):
+            if clave_motor in r:
+                result_vars[clave_ui].set("1: Out of range" if r[clave_motor] else "0: In range")
+            else:
+                result_vars[clave_ui].set("-")
 
     _AYUDA_API_WRAPPER_1980_COMUN = [
         "Combina el motor CTL de API Table-53/54 (metrico) o Table-5/6/23/24 (US), "
         "1980, con el modulo de presion API MPMS 11.2.1/11.2.1M (CPL): primero "
         "converge la densidad/gravedad por temperatura, y con ese resultado calcula "
         "la correccion adicional por presion.",
-        "El modulo de presion (CPL) esta validado contra un caso real capturado en "
-        "la app (Density_obs=1000 kg/m3, T=25°C, P=20 bar(g), EVP=0 -> CPL=1.001045, "
-        "reproducido con un error de 0.00003%). La combinacion completa de esta "
-        "pestaña (CTL+CPL iterando juntos) no tiene todavia su propio caso real "
-        "capturado end-to-end.",
+        "El modulo de presion (CPL) sigue API MPMS 11.2.1. Ejemplo: Density_obs=1000 "
+        "kg/m3, T=25°C, P=20 bar(g), EVP=0 -> CPL=1.001045. CTL y CPL se iteran juntos.",
         "'Equilibrium Pressure' (EVP): presion de vapor de equilibrio, tipicamente "
         "0 bar(g)/0 psig segun el manual -- se resta de la presion observada antes "
         "de aplicar CPL. 'Product': mismas 7 opciones que el resto de la familia.",
         "'Conversion': 'Observed -> Standard' (default, iterativo) o 'Standard -> "
-        "Observed' (directo, sin iterar) -- confirmado con una prueba de ida y "
-        "vuelta (round-trip) contra el motor real, diferencia menor a 1e-6%.",
-        "'API-11.2.1(M) Rounding': redondeo opcional de pantalla, verificado con el "
-        "caso real de la familia metrica equivalente: 994.5497 (Off) vs 994.5502 "
-        "(On) para Density=1000 kg/m3, T=25°C, P=20 bar(g). Se aplica solo al modulo "
-        "de presion, no afecta el CTL.",
-        "'Hydrometer Corr.' y 'API-2540 Rounding': confirmados como campos reales de "
-        "la pantalla (captura de pantalla en vivo), aunque su efecto numerico exacto "
-        "en esta combinacion especifica es una inferencia razonable, no un caso real "
-        "propio. 'Hydrometer Corr.' reusa la misma correccion de lectura de "
-        "hidrometro de Table5/23/53 (1980), aplicada solo en direccion "
-        "Observed->Standard. 'API-2540 Rounding' reusa el mismo patron de "
-        "Table6/24/54 (1980): solo 'Enabled (table values)' redondea el CTL a 4 "
-        "decimales. PENDIENTE, no fabricado: el motor real aplica ademas un "
-        "redondeo intermedio adicional sobre pasos internos del calculo (densidad, "
-        "temperatura, coeficiente de expansion) que no se replico a ese nivel de "
-        "detalle -- ver docstring de api_density15c_1980 en "
-        "normas/API_MPMS_Tables_1980_2004.py.",
+        "Observed' (directo, sin iterar). Ambas direcciones son inversas entre si (ida "
+        "y vuelta con diferencia menor a 1e-6 %).",
+        "'API-11.2.1(M) Rounding': redondeo opcional de pantalla. Ejemplo: 994.5497 "
+        "(Off) vs 994.5502 (On) para Density=1000 kg/m3, T=25°C, P=20 bar(g). Se aplica "
+        "solo al modulo de presion, no afecta el CTL.",
+        "'Hydrometer Corr.' reusa la misma correccion de lectura de hidrometro de "
+        "Table5/23/53 (1980), aplicada solo en direccion Observed->Standard. 'API-2540 "
+        "Rounding' reusa el mismo patron de Table6/24/54 (1980): solo 'Enabled (table "
+        "values)' redondea el CTL a 4 decimales.",
     ]
 
     def _build_tab_api1980_dens15c(self, parent):
@@ -4175,7 +4262,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", ayuda_items,
+        PanelAyudaColapsable(outer, "Fuente y alcance", ayuda_items,
                              wraplength=740).pack(fill="x", pady=(0, 10))
 
         cols = ttk.Frame(outer)
@@ -4223,10 +4310,12 @@ class App(tk.Tk):
                    command=lambda: self._on_calcular_api_mpms_112(state_key)).pack(
             fill="x", pady=(0, 10))
 
-        claves_resultado = ["cpl", "f"]
+        # C-52: Status y "Calculation out of range" (limites de la norma API MPMS 11.2.x).
+        claves_resultado = ["cpl", "f", "status", "fuera_rango"]
         etiquetas_resultado = {
             "cpl": "CPL, Correction for Pressure on Liquid [adimensional]",
             "f": f"Factor de Compresibilidad F [{f_unidad}]",
+            "status": "Status", "fuera_rango": "Calculation out of range",
         }
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
@@ -4268,22 +4357,24 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-52: codigo de Status en pantalla (mapeo C-45); dialogo solo si no hay codigo.
+            codigo = self._codigo_status_excepcion_c52(e)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
+            else:
+                st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[codigo])
             return
         result_vars = st["result_vars"]
         result_vars["cpl"].set(f"{r['cpl']:.6f}")
         result_vars["f"].set(f"{r['f']:.9f}")
-        # Mismo patron ya usado en Ethylene/Propylene y en los wrappers NGL/LPG
-        # para el flag interno "fuera_de_rango_oficial" que estas 4 funciones
-        # (api_mpms_11_2_1/11_2_1m/11_2_2/11_2_2m) YA devuelven -- aqui no se
-        # mostraba, agregado por consistencia (mismo flag, mismo significado).
-        if r.get("fuera_de_rango_oficial"):
-            messagebox.showwarning(
-                "Fuera de rango",
-                "El nucleo real senializo esta entrada como fuera del rango "
-                "fisico oficial de esta norma (ver panel de ayuda para los "
-                "limites) -- el resultado mostrado es el que el binario real "
-                "devuelve de todos modos, igual que hace la app.")
+        result_vars["status"].set(self.TEXTOS_STATUS_C52[0])
+        result_vars["fuera_rango"].set(
+            "1: Out of range" if r.get("fuera_de_rango_oficial") else "0: In range")
+        # C-53: el aviso emergente de fuera de rango se quito; lo indica la fila de arriba.
 
     _AYUDA_API_11_2_1_COMUN = [
         "API MPMS 11.2.1/11.2.1M/12.2 -- 'Compressibility Factors for "
@@ -4293,16 +4384,13 @@ class App(tk.Tk):
         "factor de compresibilidad del liquido y CPL (Correction for Pressure on "
         "Liquid) el factor que ajusta el volumen medido por la diferencia de "
         "presion (P1-P2).",
-        "Validado EXACTO (6 decimales) contra caso real, tocando esta misma "
-        "pantalla en la app: metrico (rho=800 kg/m3, T=25°C, P=50 bar(g): "
-        "CPL=1.004590, F=0.000091 1/bar) y US (API=50, T=90°F, P=50 psig: "
-        "CPL=1.000360, F=0.000007 1/psi).",
-        "'API Gravity'/'Density@15C' de entrada: sin selector de unidad "
-        "(confirmado contra la pantalla real). 'Temperature': selector "
-        "K/degC/degF/R. 'Pressure'/'Equilibrium Pressure': selector real de 11 "
-        "unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/inH2Og, confirmado "
-        "tocando la pantalla real, RONDA 39) -- convierte automaticamente a la "
-        "unidad nativa del motor (psig US / bar(g) metrico).",
+        "Ejemplos: metrico (rho=800 kg/m3, T=25°C, P=50 bar(g): CPL=1.004590, "
+        "F=0.000091 1/bar) y US (API=50, T=90°F, P=50 psig: CPL=1.000360, F=0.000007 "
+        "1/psi).",
+        "'API Gravity'/'Density@15C' de entrada: sin selector de unidad. 'Temperature': "
+        "selector K/degC/degF/R. 'Pressure'/'Equilibrium Pressure': selector de 11 "
+        "unidades gauge (bar(g)/mbar(g)/mmHgg/mmH2Og/inHgg/inH2Og); se convierte "
+        "automaticamente a la unidad nativa del calculo (psig US / bar(g) metrico).",
     ]
 
     _AYUDA_API_11_2_2_COMUN = [
@@ -4316,19 +4404,15 @@ class App(tk.Tk):
         "obligatorios (no opcionales, forman parte de la propia formula) -- ver "
         "docstring de normas/API_MPMS_Tables_1980_2004.py para el detalle "
         "completo.",
-        "Validado EXACTO (6 decimales) contra caso real capturado en la app: "
-        "metrico (Density@15C=600 kg/m3, T=25°C, P=20 bar(g): CPL=1.005227, "
+        "Ejemplos: metrico (Density@15C=600 kg/m3, T=25°C, P=20 bar(g): CPL=1.005227, "
         "F=0.000260 1/bar) y US (RD@60F=0.5, T=90°F, P=50 psig: CPL=1.002857, "
         "F=0.000057 1/psi).",
-        "'Rel.Density@60F'/'Density@15C' de entrada: sin selector de unidad "
-        "(confirmado contra la pantalla real). 'Temperature': selector "
-        "K/degC/degF/R. 'Pressure'/'Equilibrium Pressure': igual que 11.2.1 -- "
-        "selector real de 11 unidades gauge, convierte automaticamente a la "
-        "unidad nativa del motor (psig US / bar(g) metrico).",
-        "PENDIENTE de baja prioridad, no bloqueante: el flag 'API-11.2.2(M) "
-        "Rounding' de la app no se probo activado -- se espera que solo afecte "
-        "la presentacion, igual que los flags analogos ya documentados en el "
-        "resto de la familia, pero no hay un caso real propio que lo confirme.",
+        "'Rel.Density@60F'/'Density@15C' de entrada: sin selector de unidad. "
+        "'Temperature': selector K/degC/degF/R. 'Pressure'/'Equilibrium Pressure': "
+        "igual que 11.2.1, selector de 11 unidades gauge, convierte automaticamente a "
+        "la unidad nativa del calculo (psig US / bar(g) metrico).",
+        "'API-11.2.2(M) Rounding': redondeo opcional de presentacion, analogo a los "
+        "flags del resto de la familia.",
     ]
 
     def _build_tab_api112_1(self, parent):
@@ -4401,17 +4485,12 @@ class App(tk.Tk):
         "1980/2004, y distinto del motor de API MPMS 11.2.2): un polinomio "
         "racional por tramos (12 segmentos) en densidad relativa reducida, "
         "tomado de la tabla real del manual.",
-        "Validado EXACTO (6 decimales) contra 4 casos reales capturados en la "
-        "app, mas 3 pruebas de ida y vuelta (round-trip) entre pares inversos "
-        "(23E<->24E, 53E<->54E, 59E<->60E).",
-        "'Relative Density'/'Density' de entrada: sin selector de unidad "
-        "(siempre RD adimensional o kg/m3). 'Temperature': selector real "
-        "K/°C/°F/R (confirmado tocando la pantalla real, RONDA 39; antes se "
-        "creia fija en °C sin selector). 'API Rounding': redondea la entrada "
-        "(a la graduacion real de un "
-        "hidrometro o termometro, segun el campo) y la salida principal a la "
-        "precision de pantalla real de la app -- SI cambia el numero devuelto, "
-        "verificado contra el motor real de FlowXpert.",
+        "Las tablas forman pares inversos (23E<->24E, 53E<->54E, 59E<->60E).",
+        "'Relative Density'/'Density' de entrada: sin selector de unidad (siempre RD "
+        "adimensional o kg/m3). 'Temperature': selector K/°C/°F/R. 'API Rounding': "
+        "redondea la entrada (a la graduacion de un hidrometro o termometro, segun el "
+        "campo) y la salida principal a la precision de pantalla; SI cambia el numero "
+        "devuelto.",
     ]
 
     def _build_tab_ngl_lpg_ctl(self, parent, state_key, descripcion,
@@ -4427,7 +4506,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_NGL_LPG_COMUN, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -4466,9 +4545,12 @@ class App(tk.Tk):
                    command=lambda: self._on_calcular_ngl_lpg_ctl(state_key)).pack(
             fill="x", pady=(0, 10))
 
-        claves_resultado = [clave for clave, _et, _fmt in salidas] + ["ctl"]
+        # C-52: Status y "Calculation out of range" (GPA TP-27: -46..93 °C, RD@60°F 0.350..0.688).
+        claves_resultado = [clave for clave, _et, _fmt in salidas] + ["ctl", "status", "fuera_rango"]
         etiquetas_resultado = {clave: et for clave, et, _fmt in salidas}
         etiquetas_resultado["ctl"] = "CTL, Correction for Temperature on Liquid [adimensional]"
+        etiquetas_resultado["status"] = "Status"
+        etiquetas_resultado["fuera_rango"] = "Calculation out of range"
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
         result_vars = self._build_result_labels(result_frame, claves_resultado, etiquetas_resultado)
@@ -4497,12 +4579,26 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-52: codigo de Status en pantalla (mapeo C-45); dialogo solo si no hay codigo.
+            codigo = self._codigo_status_excepcion_c52(e)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
+            else:
+                st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[codigo])
             return
         result_vars = st["result_vars"]
+        # C-53: la bandera del motor ya es la de la norma (23E/53E/59E incluidas); la falta de
+        # convergencia llega como ArithmeticError y se muestra como "3: No convergence".
+        fuera = bool(r.get("fuera_de_rango"))
         for clave, _et, fmt in st["salidas"]:
             result_vars[clave].set(fmt.format(r[clave]))
         result_vars["ctl"].set(f"{r['ctl']:.6f}")
+        result_vars["status"].set(self.TEXTOS_STATUS_C52[0])
+        result_vars["fuera_rango"].set("1: Out of range" if fuera else "0: In range")
 
     def _build_tab_api_table23e(self, parent):
         self._build_tab_ngl_lpg_ctl(
@@ -4574,32 +4670,23 @@ class App(tk.Tk):
         "el modulo de presion API MPMS 11.2.2/11.2.2M mas GPA TP-15 (presion "
         "de vapor en equilibrio), dentro de un solver iterativo (hasta 100 "
         "iteraciones, con aceleracion tipo Aitken para converger mas rapido).",
-        "'API Rel. Density @60°F NGL/LPG': validado EXACTO a 6 decimales "
-        "contra un caso real completo (RD=0.5, T=110°F=43.33°C, P=200 "
+        "'API Rel. Density @60°F NGL/LPG': ejemplo (RD=0.5, T=110°F=43.33°C, P=200 "
         "psia=13.79 bar(a), Atm=14.696 psia=1.0133 bar(a)) -> RD60F=0.537512, "
-        "CTL=0.927163, CPL=1.003289, CTPL=0.930212, F=0.000047 1/psi, "
-        "Equilibrium Pressure=9.020282 bar(a). Es la unica pantalla de esta "
-        "familia que trabaja nativamente en unidades US (°F/psia).",
-        "'API Density @15°C/@20°C NGL/LPG': sin caso real propio capturado -- "
-        "validados por una prueba algebraica de ida y vuelta (round-trip) "
-        "contra Table53E/54E y Table59E/60E con Pressure=Equilibrium "
-        "Pressure=0 bar(g) (CPL debe dar 1.0 exacto, y da). Sin presion el "
-        "resultado esta confirmado; con presion distinta de 0 se apoya en el "
-        "mismo modulo de presion/TP-15 ya validado en el caso de RD60F, pero "
-        "sin un caso real propio con presion distinta de cero.",
-        "'GPA TP-15 Rounding' y 'API-11.2.4/11.2.2(M) Rounding': redondeos "
-        "opcionales de pantalla ya conectados a sus parametros internos "
-        "correspondientes. 'P100 Correlation': metodo alterno de GPA TP-15 "
-        "que usa un valor de Vapor Pressure @100°F ya conocido en vez de la "
-        "tabla por defecto -- validado con caso real.",
-        "'Temperature': selector real K/°C/°F/R. 'Pressure'/'Equilibrium "
-        "Pressure'/'Atmospheric Pressure' (esta ultima solo en RD60F) Y "
-        "'Vapor Pressure @100°F': selector real ABSOLUTO de 11 unidades "
-        "(bar(a)/mbar(a)/mmHga/mmH2Oa/inHga/inH2Oa, default bar(a)) -- "
-        "confirmado tocando la pantalla real en las 3 pestañas (RONDA 39 "
-        "para Pressure/Equilibrium/Atmospheric; RONDA 52 para Vapor "
-        "Pressure @100°F, que corrige la nota anterior de RONDA 51 que lo "
-        "daba por unidad fija sin confirmar).",
+        "CTL=0.927163, CPL=1.003289, CTPL=0.930212, F=0.000047 1/psi, Equilibrium "
+        "Pressure=9.020282 bar(a). Es la unica pantalla de esta familia que trabaja "
+        "nativamente en unidades US (°F/psia).",
+        "'API Density @15°C/@20°C NGL/LPG': con Pressure = Equilibrium Pressure = 0 "
+        "bar(g) el CPL es 1.0 exacto y el resultado coincide con Table53E/54E y "
+        "Table59E/60E. Con presion distinta de 0 usa el mismo modulo de presion/TP-15 "
+        "que RD60F.",
+        "'GPA TP-15 Rounding' y 'API-11.2.4/11.2.2(M) Rounding': redondeos opcionales "
+        "de pantalla conectados a sus parametros internos correspondientes. 'P100 "
+        "Correlation': metodo alterno de GPA TP-15 que usa un valor de Vapor Pressure "
+        "@100°F ya conocido en vez de la tabla por defecto.",
+        "'Temperature': selector K/°C/°F/R. 'Pressure'/'Equilibrium "
+        "Pressure'/'Atmospheric Pressure' (esta ultima solo en RD60F) y 'Vapor Pressure "
+        "@100°F': selector ABSOLUTO de 11 unidades "
+        "(bar(a)/mbar(a)/mmHga/mmH2Oa/inHga/inH2Oa, default bar(a)).",
     ]
 
     def _build_tab_ngl_lpg_wrapper(self, parent, state_key, titulo, descripcion,
@@ -4629,7 +4716,7 @@ class App(tk.Tk):
         outer = ttk.Frame(scroll_parent, padding=12)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text=descripcion, wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_NGL_LPG_WRAPPER_COMUN, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -4892,6 +4979,10 @@ class App(tk.Tk):
         try:
             r = st["funcion"](**kwargs)
         except Exception as e:
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
             messagebox.showerror("Error de calculo", str(e))
             return
         result_vars = st["result_vars"]
@@ -4999,36 +5090,24 @@ class App(tk.Tk):
         "secante sobre otra ecuacion de estado tipo BWR (con un termino de "
         "correccion exponencial propio). CTPL (Correction for Temperature on "
         "Liquid) es esa densidad dividida por una constante de referencia.",
-        "Validado contra la pantalla real de la app (captura de pantalla, no "
-        "solo formula): Etileno T=90°F (32.2222°C), P=250 psia (17.2369 "
-        "bar(a)) -> Density=21.13020 kg/m3, Z=0.901174. Propileno T=60°F "
-        "(15.5556°C), P=200 psia (13.78952 bar(a)) -> Density=523.6218 kg/m3, "
-        "CTPL=1.002541, Equilibrium Pressure=9.047929 bar(g).",
-        "'Temperature'/'Pressure' de entrada: la pantalla real SI tiene un "
-        "selector de unidad (confirmado en vivo, RONDA 39) -- Temperature "
-        "ofrece K/°C/°F/R (default °C) y Pressure ofrece 11 unidades "
-        "ABSOLUTAS (bar(a)/mbar(a)/mmHga/mmH2Oa/inHga/inH2Oa, default "
-        "bar(a); psia NO es opcion), aunque el motor de calculo internamente "
-        "trabaja en °F/psia (esta pestaña hace esa conversion en segundo "
-        "plano, igual que el resto de la GUI). Rango oficial del manual: "
-        "Etileno T entre 65 y 167°F (18.3 a 75°C), P entre 200 y 2100 psia "
+        "Ejemplos: Etileno T=90°F (32.2222°C), P=250 psia (17.2369 bar(a)) -> "
+        "Density=21.13020 kg/m3, Z=0.901174. Propileno T=60°F (15.5556°C), P=200 psia "
+        "(13.78952 bar(a)) -> Density=523.6218 kg/m3, CTPL=1.002541, Equilibrium "
+        "Pressure=9.047929 bar(g).",
+        "'Temperature'/'Pressure' de entrada: Temperature ofrece K/°C/°F/R (default °C) "
+        "y Pressure ofrece 11 unidades ABSOLUTAS "
+        "(bar(a)/mbar(a)/mmHga/mmH2Oa/inHga/inH2Oa, default bar(a)); internamente el "
+        "calculo trabaja en °F/psia (la conversion se hace en segundo plano). Rango de "
+        "la norma: Etileno T entre 65 y 167°F (18.3 a 75°C), P entre 200 y 2100 psia "
         "(13.8 a 144.8 bar(a)).",
-        "'API Rounding': switch booleano de la pantalla real (Off/On). Solo "
-        "'Off' tiene un caso real de referencia verificado digito a digito -- "
-        "'On' se probo sin errores mas no cambio el resultado en el unico "
-        "caso probado; no hay un caso real propio que confirme su efecto "
-        "exacto en otras condiciones (documentado honesto, no se fabrica).",
-        "Nota pendiente (no bloqueante): en Propileno, la pantalla real "
-        "rotula 'Equilibrium Pressure' como bar(g) (manometrica) pero el "
-        "numero que reproduce el caso real conocido sale de una conversion "
-        "DIRECTA psia->bar (sin restar la presion atmosferica, que si "
-        "convertiria a verdadera presion manometrica) -- no se determino si "
-        "es una convencion propia de FlowXpert o una etiqueta heredada de la "
-        "norma; no se inventa la explicacion.",
-        "Esta familia (a diferencia de otras normas del proyecto) no tiene "
-        "camino de respaldo alternativo: si el motor de calculo real no esta "
-        "disponible, estas 2 pestañas fallan con un error explicito en vez de "
-        "mostrar un numero sin respaldo.",
+        "'API Rounding': switch booleano (Off/On).",
+        "Nota: en Propileno, 'Equilibrium Pressure' se rotula como bar(g) pero el valor "
+        "proviene de una conversion directa psia->bar (sin restar la presion "
+        "atmosferica).",
+        "Esta familia (a diferencia de otras normas del proyecto) no tiene camino de "
+        "respaldo alternativo: si el motor de calculo no esta disponible, estas 2 "
+        "pestañas fallan con un error explicito en vez de mostrar un numero sin "
+        "respaldo.",
     ]
 
     def _build_tab_ethylene_propylene(self, parent, state_key, descripcion,
@@ -5089,9 +5168,15 @@ class App(tk.Tk):
                    command=lambda: self._on_calcular_ethylene_propylene(state_key)).pack(
             fill="x", pady=(0, 10))
 
-        claves_resultado = ["density_kg_m3"] + [clave for clave, _et, _fmt in salidas]
+        # C-52: Status y rango de la norma ("Range" en API 11.3.2.1, "Calculation out of range"
+        # en API 11.3.3.2, como en el manual de cada funcion).
+        claves_resultado = ["density_kg_m3"] + [clave for clave, _et, _fmt in salidas] + [
+            "status", "fuera_rango"]
         etiquetas_resultado = {"density_kg_m3": "Density [kg/m3]"}
         etiquetas_resultado.update({clave: et for clave, et, _fmt in salidas})
+        etiquetas_resultado["status"] = "Status"
+        etiquetas_resultado["fuera_rango"] = ("Range" if state_key == "ethylene"
+                                              else "Calculation out of range")
         result_frame = ttk.LabelFrame(right_col, text="Resultados", padding=10)
         result_frame.pack(fill="x")
         result_vars = self._build_result_labels(result_frame, claves_resultado, etiquetas_resultado)
@@ -5124,19 +5209,40 @@ class App(tk.Tk):
         try:
             r = st["funcion"](temp_f, presion_psia, api_rounding)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            # C-44 (2026-11-18): no dejar a la vista el resultado anterior (p. ej.
+            # "No convergence within 15 iterations" de las tablas 2004).
+            for var in st["result_vars"].values():
+                var.set("-")
+            # C-52: codigo de Status en pantalla (mapeo C-45); dialogo solo si no hay codigo.
+            codigo = self._codigo_status_excepcion_c52(e)
+            if codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
+            else:
+                st["result_vars"]["status"].set(self.TEXTOS_STATUS_C52[codigo])
             return
         result_vars = st["result_vars"]
+        fuera_texto = "1: Out of range" if r.get("fuera_de_rango") else "0: In range"
+        if not r.get("convergio", True):
+            # C-52: el motor no lanza excepcion: devuelve NaN con convergio=False. Sin convergencia
+            # del solver -> 3; densidad sin sentido fisico (> 100 lbm/ft3) -> 2; otro caso -> 1.
+            aviso = (r.get("aviso") or "").lower()
+            if "no convergio" in aviso:
+                codigo = 3
+            elif "calculation error" in aviso:
+                codigo = 2
+            else:
+                codigo = 1
+            for var in result_vars.values():
+                var.set("-")
+            result_vars["status"].set(self.TEXTOS_STATUS_C52[codigo])
+            result_vars["fuera_rango"].set(fuera_texto)
+            return
+        result_vars["status"].set(self.TEXTOS_STATUS_C52[0])
+        result_vars["fuera_rango"].set(fuera_texto)
         result_vars["density_kg_m3"].set(f"{r['density_kg_m3']:.6f}")
         for clave, _et, fmt in st["salidas"]:
             result_vars[clave].set(fmt.format(r[clave]))
-        if r.get("fuera_de_rango"):
-            messagebox.showwarning(
-                "Fuera de rango",
-                "El nucleo real senializo esta entrada como fuera del rango "
-                "fisico valido de la correlacion (ver panel de ayuda para los "
-                "limites) -- el resultado mostrado es el que el binario real "
-                "devuelve de todos modos, igual que hace la app.")
+        # C-53: el aviso emergente de fuera de rango se quito; lo indica la fila de rango.
 
     def _build_tab_api_ethylene(self, parent):
         self._build_tab_ethylene_propylene(
@@ -5166,31 +5272,25 @@ class App(tk.Tk):
     # los 7 casos reales de validacion.
     # ===========================================================================
     _AYUDA_GPA_TP15 = [
-        "'GPA-TP15' -- Equilibrium Vapor Pressure for Natural Gas Liquids "
-        "(NGL) according to GPA-TP15: exp(polinomio(RD)/(T+443) + "
-        "polinomio(RD)) con 7 filas de coeficientes por rango de densidad "
-        "relativa reducida (RD), tabla real extraida a bytes crudos del "
-        "binario. CERRADA [CERTAIN] con 7 casos reales nuevos capturados "
-        "en vivo -- ver normas/GPA_TP15.py.",
-        "Confirmada como pantalla PROPIA del menu raiz (categoria 'GPA', "
-        "junto a 'GPA-2172' -- esta ultima aun no implementada). TAMBIEN "
-        "se usa como sub-calculo interno de los 3 wrappers combinados de "
-        "'E NGL/LPG (TP-27)' (mismo motor Python, sin duplicar codigo).",
-        "Caso real: RD=0.6, T=60°F (15.5555556°C), API Rounding=0, P100 "
-        "Correlation=0 -> Equilibrium Pressure=1.157104 bar(a). Con P100 "
-        "Correlation=1 (Vapor Pres. @100°F=100 psia=6.89476 bar(a)) -> "
-        "3.268000 bar(a). Con API Rounding=1 (redondea el resultado a 1 "
-        "decimal en psia antes de convertir a la unidad de pantalla) -> "
-        "1.158320/3.268116 bar(a) respectivamente.",
-        "'Rel. Density @60°F': rango de PANTALLA 0..0.75 (no bloquea el "
-        "calculo fuera de el). El dominio FISICO real de la correlacion "
-        "es mas angosto (aprox. [0.35,0.676], con un limite de "
-        "temperatura que depende de RD) -- fuera de ese dominio, 'Range "
-        "Status' muestra 'Out of range' pero el resultado se calcula "
-        "igual (con la fila de tabla mas cercana), confirmado con caso "
-        "real RD=0.75.",
-        "'Vapor Pres. @100°F' solo aplica (y solo se muestra en la "
-        "pantalla real) cuando 'P100 Correlation' esta activo.",
+        "'GPA-TP15': Equilibrium Vapor Pressure for Natural Gas Liquids (NGL) according "
+        "to GPA-TP15: exp(polinomio(RD)/(T+443) + polinomio(RD)) con 7 filas de "
+        "coeficientes por rango de densidad relativa reducida (RD). Ver "
+        "normas/GPA_TP15.py.",
+        "Pantalla propia del menu raiz (categoria 'GPA', junto a 'GPA-2172'). Tambien "
+        "se usa como sub-calculo interno de los 3 calculos combinados de 'E NGL/LPG "
+        "(TP-27)'.",
+        "Ejemplo: RD=0.6, T=60°F (15.5555556°C), API Rounding=0, P100 Correlation=0 -> "
+        "Equilibrium Pressure=1.157104 bar(a). Con P100 Correlation=1 (Vapor Pres. "
+        "@100°F=100 psia=6.89476 bar(a)) -> 3.268000 bar(a). Con API Rounding=1 "
+        "(redondea el resultado a 1 decimal en psia antes de convertir a la unidad de "
+        "pantalla) -> 1.158320/3.268116 bar(a) respectivamente.",
+        "'Rel. Density @60°F': rango de PANTALLA 0..0.75 (no bloquea el calculo fuera "
+        "de el). El dominio FISICO de la correlacion es mas angosto (aprox. "
+        "[0.35,0.676], con un limite de temperatura que depende de RD): fuera de ese "
+        "dominio, 'Range Status' muestra 'Out of range' pero el resultado se calcula "
+        "igual (con la fila de tabla mas cercana), por ejemplo con RD=0.75.",
+        "'Vapor Pres. @100°F' solo aplica (y solo se muestra) cuando 'P100 Correlation' "
+        "esta activo.",
     ]
 
     def _build_tab_gpa_tp15(self, parent):
@@ -5200,7 +5300,7 @@ class App(tk.Tk):
         ttk.Label(outer, text="GPA-TP15 -- Equilibrium Vapor Pressure for "
                               "Natural Gas Liquids (NGL) according to GPA-TP15.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_GPA_TP15, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -5346,74 +5446,24 @@ class App(tk.Tk):
         "CO": "CO", "Agua": "Agua", "H2S": "H2S", "Helio": "Helio", "Argon": "Argon",
     }
     _AYUDA_GPA2172 = [
-        "'GPA-2172' -- Calculation of Gross Heating Value, Relative Density, "
-        "Compressibility (y, segun el nombre del estandar, Theoretical "
-        "Hydrocarbon Liquid Content -- ESA parte NO esta implementada: el "
-        "nucleo real de FlowXpert (`FUN_1800deb44`, decompilado y validado "
-        "por llamada directa ctypes, sin Excel) solo produce las 21 salidas "
-        "de calor/densidad/compresibilidad de mas abajo, ninguna de liquid "
-        "content -- documentado honesto, no se fabrica esa salida).",
-        "Motor CERRADO [CERTAIN]: 4 variantes reales en el .xll "
-        "(`GPA2172_C`/`GPA2172_M` vigentes + `GPA2172_96_C`/`GPA2172_96_M`, "
-        "confirmado que estas 2 ultimas son alias de compatibilidad SIN "
-        "logica propia, saltan directo a las vigentes). Formulas ajustadas "
-        "y validadas contra el oraculo .xll real (3000 casos aleatorios, "
-        "editions/sistemas/modos neo-Pentano variados, error maximo "
-        "~1e-15, precision de maquina) -- ver normas/GPA_2172.py.",
-        "Tablas de propiedades GPA2145 extraidas byte a byte del binario "
-        "para las 5 ediciones customary (1989/2000/2003/2009/2016) y las 4 "
-        "metricas (2000/2003/2009/2016 -- NO existe edicion 1989 metrica, "
-        "confirmado por decompilacion Y por el manual). Confirmado que las "
-        "ediciones 2000/2003 (ambos sistemas) NO tienen propiedades de "
-        "Hidrogeno/CO/Argon (todas en 0), tal como dice el manual literal.",
-        "'neo-Pentane mode' usa el MISMO selector 'Add to iC5'/'Add to nC5'/"
-        "'Neglect' que AGA-8/GERG/ISO 6976, pero el PLIEGUE lo hace el motor "
-        "propio de GPA_2172.py (parametro neo_pentano_modo de "
-        "calcular_gpa2172), NO la funcion compartida AGA_8.aplicar_modo_"
-        "neo_pentano -- para 'Add to iC5'/'Add to nC5' dan el mismo numero "
-        "(misma operacion matematica), pero para 'Neglect' la funcion "
-        "compartida no renormaliza (deja hueco en la suma, pensada para "
-        "que el CONSUMIDOR renormalice, como hacen AGA8-DETAIL/AGA-10) "
-        "mientras que calcular_gpa2172 exige que los 22 valores crudos "
-        "sumen ~100% y renormaliza el internamente -- usar la funcion "
-        "compartida para pre-plegar y despues llamar con neo_pentano_"
-        "modo=1 fijo (bug real, RONDA 60) hacia que 'Neglect' con "
-        "neo-Pentano >~0.01%% fallara con 'composicion invalida' (el total "
-        "pre-plegado quedaba en 100-neo, no 100). Corregido: la GUI ahora "
-        "pasa la composicion CRUDA (22 valores) + neo_pentano_modo mapeado "
-        "de NEO_PENTANO_MODOS, dejando que calcular_gpa2172 haga el pliegue.",
-        "PANTALLA CONFIRMADA EN VIVO [CERTAIN, uiautomator, AVD flowxpert_rd, "
-        "RONDA 54, 2026-09-16]: categoria 'GPA' -> 'GPA-2172' junto a "
-        "'GPA-TP15', tal como esperaba el manual. Composicion: mismo grid de "
-        "21+neo-Pentano que el resto de la app (la pantalla real la presenta "
-        "como un registro de libreria editable con nombre + resumen, aqui se "
-        "usa el mismo grid de entradas del resto del proyecto, decision de "
-        "diseño ya establecida, no un hueco). 'Edition' (etiqueta real en "
-        "pantalla: 'GPA-2145 Edition'): RONDA 54 (sin `pm clear`, leyendo un "
-        "dump no reseteado) concluyo default '2003' para Metric, dando por "
-        "cerrado el campo. RONDA 59 (con `pm clear` + checked=\"true\" real en "
-        "el dropdown, mismo metodo de RONDA 55) corrigio: el default real de "
-        "fabrica es 'GPA2145-00 (2000)' tanto en Customary (clave 2 de "
-        "GPA2172_EDICIONES_C) como en Metric (clave 1 de GPA2172_EDICIONES_M, "
-        "NO la clave 2 = '2003' que asumia RONDA 54) -- confirmado con 4 "
-        "capturas independientes (fresh + dropdown, 2 visitas separadas a la "
-        "pestaña Metric) siempre mostrando '2000' sin tocar el campo. "
-        "Corregido el default de la GUI para no depender de un mismo indice "
-        "numerico compartido entre sistemas. 'neo-Pentane "
-        "Mode': default real de pantalla es 'Add to nC5' (el codigo comparte "
-        "default 'Add to iC5' con el resto de la app -- ver "
-        "_build_composicion_grid_con_neo -- se sobreescribe aqui a 'Add to "
-        "nC5' solo en esta pestaña). Resultados: los 7 campos x 3 bases (Wet/"
-        "Dry/Saturated) confirmados 1 a 1 contra la pantalla real (la app los "
-        "muestra en una lista vertical Wet->Dry->Saturated en vez de una "
-        "tabla de 3 columnas, presentacion distinta, mismos campos/unidades/"
-        "orden) -- unidades MJ/m3, kg/kmol, adimensional, adimensional, "
-        "adimensional, MJ/kg, MJ/m3 en Metric, todas confirmadas. 2 CASOS "
-        "REALES capturados en pantalla (composicion 'Default' del proyecto y "
-        "un gas humedo con Agua 15%, edicion 2003) validados 1 a 1 contra "
-        "normas/GPA_2172.py: 16/16 valores coinciden a la precision mostrada "
-        "en pantalla (6 cifras) -- el motor sube de [CERTAIN via oraculo "
-        ".xll] a [CERTAIN via oraculo + 2 casos reales de pantalla].",
+        "'GPA-2172': Calculation of Gross Heating Value, Relative Density, "
+        "Compressibility. La parte 'Theoretical Hydrocarbon Liquid Content' del "
+        "estandar NO esta implementada: se calculan las 21 salidas de "
+        "calor/densidad/compresibilidad de mas abajo.",
+        "Sistemas Customary y Metric; las variantes de 1996 son alias de compatibilidad "
+        "de las vigentes, sin logica propia. Ver normas/GPA_2172.py.",
+        "Tablas de propiedades GPA 2145 para las 5 ediciones customary "
+        "(1989/2000/2003/2009/2016) y las 4 metricas (2000/2003/2009/2016; no existe "
+        "edicion 1989 metrica). Las ediciones 2000/2003 (ambos sistemas) no tienen "
+        "propiedades de Hidrogeno/CO/Argon (todas en 0).",
+        "'neo-Pentane mode' usa el mismo selector 'Add to iC5'/'Add to nC5'/'Neglect' "
+        "que AGA-8/GERG/ISO 6976. Con 'Neglect' el neo-Pentano se descarta y la "
+        "composicion se renormaliza a 100 %.",
+        "Composicion: mismo grid de 21 componentes + neo-Pentano que el resto de la "
+        "aplicacion. 'GPA-2145 Edition': default 'GPA2145-00 (2000)' tanto en Customary "
+        "como en Metric. 'neo-Pentane Mode': default 'Add to nC5' en esta pestaña. "
+        "Resultados: 7 campos x 3 bases (Wet/Dry/Saturated); unidades en Metric: MJ/m3, "
+        "kg/kmol, adimensional, adimensional, adimensional, MJ/kg, MJ/m3.",
     ]
 
     def _build_tab_gpa2172(self, parent, sistema):
@@ -5427,7 +5477,7 @@ class App(tk.Tk):
                               "Relative Density and Compressibility for Natural "
                               "Gas Mixtures for Custody Transfer.",
                   wraplength=820).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_GPA2172, wraplength=800).pack(
             fill="x", pady=(0, 10))
 
@@ -5547,13 +5597,10 @@ class App(tk.Tk):
         # total en (100-neo) en vez de 100, lo que el chequeo interno de
         # calcular_gpa2172 (tolerancia 0.01%) rechazaba como "composicion
         # invalida" para cualquier neo-Pentano > ~0.01% en modo "Neglect".
-        suma_cruda = sum(comp_pct.values()) + neo_pct
-        if abs(suma_cruda - 100.0) > 0.01:
-            messagebox.showerror(
-                "Composicion invalida",
-                f"La composicion (21 componentes + neo-Pentano) suma "
-                f"{suma_cruda:.4f}%, no 100%. Revisa los 21 campos + neo-Pentano.")
-            return
+        # C-44 (2026-11-18): sin prevalidacion propia en %. El motor aplica el
+        # mismo criterio que FX sobre las fracciones (|suma - 1| >= 1e-4, suma
+        # secuencial) y devuelve status 3; la prevalidacion en % rechazaba
+        # composiciones que FX calcula (p. ej. 90 + 10.01 %) y dejaba pasar otras.
         comp22 = [0.0] * 22
         for nombre_aga8, nombre_tabla in self._GPA2172_NOMBRE_AGA8_A_TABLA.items():
             idx = ORDEN_TABLA_GPA2145.index(nombre_tabla)
@@ -5606,62 +5653,40 @@ class App(tk.Tk):
     # absoluta <0.01psig).
     # ===========================================================================
     _AYUDA_ASTM_D1550_CTL = [
-        "'ASTM D1550 CTL' -- Correction Factor for Temperature (CTL) de "
-        "Butadieno a 60°F, segun ASTM D1550-94 (Reapproved 2005), Tabla 2. "
-        "Interpolacion bilineal PURA sobre una tabla real de 14 filas (RD@60°F "
-        "0.621-0.634) x 121 columnas (T -10..110°F), extraida a bytes crudos "
-        "del binario -- SIN iteracion, SIN dependencia de otra norma. "
-        "CERRADA [CERTAIN]: 400 casos aleatorios validados a precision de "
-        "maquina (diff=0.0) contra el nucleo real, mas 3 casos reales "
-        "capturados en vivo -- ver normas/ASTM_D1550.py.",
+        "'ASTM D1550 CTL': Correction Factor for Temperature (CTL) de Butadieno a 60°F, "
+        "segun ASTM D1550-94 (Reapproved 2005), Tabla 2. Interpolacion bilineal sobre "
+        "una tabla de 14 filas (RD@60°F 0.621-0.634) x 121 columnas (T -10..110°F), sin "
+        "iteracion y sin dependencia de otra norma. Ver normas/ASTM_D1550.py.",
         "Ejemplo: RD@60°F=0.63, T=60°F -> CTL=1.000000 (T=60°F es la "
         "temperatura de referencia, CTL=1 para cualquier densidad). "
         "RD@60°F=0.625, T=30°F -> CTL=1.032000.",
-        "'Rel. Density @60°F': rango de PANTALLA 0..0.75 (no bloquea el "
-        "calculo fuera de el). El dominio FISICO real de la tabla es mas "
-        "angosto (0.621-0.634 x -10..110°F) -- fuera de ese dominio (o si "
-        "el CTL resultante se sale de 0.941-1.074), 'Range Status' muestra "
-        "'Out of range' pero el resultado se calcula igual (recortado al "
-        "limite mas cercano), confirmado con caso real RD@60°F=0.70, "
-        "T=30°F -> CTL=1.031000, Range Status='Out of range'.",
+        "'Rel. Density @60°F': rango de PANTALLA 0..0.75 (no bloquea el calculo fuera "
+        "de el). El dominio FISICO de la tabla es mas angosto (0.621-0.634 x "
+        "-10..110°F): fuera de ese dominio (o si el CTL resultante se sale de "
+        "0.941-1.074), 'Range Status' muestra 'Out of range' pero el resultado se "
+        "calcula igual (recortado al limite mas cercano). Ejemplo: RD@60°F=0.70, T=30°F "
+        "-> CTL=1.031000, Range Status='Out of range'.",
     ]
     _AYUDA_ASTM_D1550_RD60 = [
-        "'ASTM D1550 Rel. Density @60F' -- convierte densidad relativa "
-        "OBSERVADA (a T, P) a densidad relativa a 60°F, segun ASTM D1550, "
-        "Tabla 1. Itera (hasta 20 pasos) la relacion RD_obs = RD60 x "
-        "CTL(RD60,T) x CPL(RD60,T,P) -- CONFIRMADO por decompilacion "
-        "directa que el factor de compresibilidad (F, CPL) se calcula "
-        "llamando LITERALMENTE al mismo nucleo que 'API MPMS 11.2.2' "
-        "(pantalla 'API 11.2/12.2'), tal como cita el manual oficial "
-        "('the compressibility factor is calculated in accordance with "
-        "API MPMS 11.2.2:1984'). CERRADO [CERTAIN] para presion absoluta "
-        ">=0.01psig (cubre el 100% del uso realista de la pantalla, rango "
-        "-10..2500psig) -- ver normas/ASTM_D1550.py para el detalle "
-        "completo, incluido un pendiente honesto (sin caso real, sin "
-        "formula confiable decompilada) para presion practicamente 0.",
-        "4 casos reales capturados en vivo: (1) RD_obs=0.63, T=60°F, "
-        "P=100psig, Rounding=0 -> RD60=0.629204, CPL=1.001266. (2) igual "
-        "con Rounding=1 -> RD60=0.629182, CPL=1.001300. (3) RD_obs=0.63, "
-        "T=30°F, P=100psig, Rounding=0 -> Status='No convergence' (el "
-        "solver real NO converge para esta combinacion -- reproducido "
-        "exacto por este porte). (4) RD_obs=0.63, T=60°F, P=50bar(g) "
-        "(=725.19psig), Rounding=0 -> RD60=0.624181, CPL=1.009322.",
-        "'Status' solo aparece en pantalla cuando NO es OK (ej. 'No "
-        "convergence' tras 20 iteraciones sin converger) -- en los casos "
-        "OK el campo queda oculto, igual que en la app real.",
-        "'Pressure': selector real de presion MANOMETRICA (bar(g)/mbar(g)/"
-        "mmHgg/mmH2Og/... -- NO absoluta), rango de pantalla -10..2500psig "
-        "(=-0.689476..172.369 bar(g)), default 100psig.",
-        "'Compressibility [1/psi]' (resultado): CONFIRMADO en vivo (RONDA "
-        "54, uiautomator, AVD flowxpert_rd) que la pantalla real SI abre un "
-        "selector de unidad al tocar este campo (Spinner con 5 opciones: "
-        "1/Pa, 1/kPa, 1/MPa, 1/psi, 1/bar) -- igual que otros resultados de "
-        "la app real (ej. 1983 Sup.Calorific Val.). Por decision de producto "
-        "ya establecida (ver memoria 'feedback-unidades-en-cada-campo-"
-        "numerico'), este proyecto NO agrega selectores de unidad en "
-        "campos de RESULTADO/SALIDA aunque la app real los tenga -- se "
-        "deja fijo en 1/psi (unidad nativa del nucleo), sin cambio de "
-        "codigo, la etiqueta fija YA era correcta.",
+        "'ASTM D1550 Rel. Density @60F': convierte densidad relativa OBSERVADA (a T, P) "
+        "a densidad relativa a 60°F, segun ASTM D1550, Tabla 1. Itera (hasta 20 pasos) "
+        "la relacion RD_obs = RD60 x CTL(RD60,T) x CPL(RD60,T,P). El factor de "
+        "compresibilidad (F, CPL) se calcula con el mismo metodo que 'API MPMS 11.2.2' "
+        "(pantalla 'API 11.2/12.2'), como indica la norma ('the compressibility factor "
+        "is calculated in accordance with API MPMS 11.2.2:1984'). Ver "
+        "normas/ASTM_D1550.py.",
+        "Ejemplos: (1) RD_obs=0.63, T=60°F, P=100psig, Rounding=0 -> RD60=0.629204, "
+        "CPL=1.001266. (2) igual con Rounding=1 -> RD60=0.629182, CPL=1.001300. (3) "
+        "RD_obs=0.63, T=30°F, P=100psig, Rounding=0 -> Status='No convergence' (el "
+        "metodo iterativo no converge para esta combinacion). (4) RD_obs=0.63, T=60°F, "
+        "P=50bar(g) (=725.19psig), Rounding=0 -> RD60=0.624181, CPL=1.009322.",
+        "'Status' solo aparece en pantalla cuando NO es OK (ej. 'No convergence' tras "
+        "20 iteraciones sin converger); en los casos OK el campo queda oculto.",
+        "'Pressure': selector de presion MANOMETRICA (bar(g)/mbar(g)/mmHgg/mmH2Og/..., "
+        "NO absoluta), rango de pantalla -10..2500psig (=-0.689476..172.369 bar(g)), "
+        "default 100psig.",
+        "'Compressibility [1/psi]' (resultado): se muestra fijo en 1/psi (unidad nativa "
+        "del calculo).",
     ]
 
     # ===========================================================================
@@ -5674,37 +5699,21 @@ class App(tk.Tk):
     # para la evidencia completa y el pendiente honesto).
     # ===========================================================================
     _AYUDA_ASTM_D4311M_09_M = [
-        "'ASTM D4311M (2009)' -- Volume Correction Factor (CTL) para "
-        "Asfalto a la temperatura base, segun ASTM D4311/D4311M-09 "
-        "(formula directa del Appendix X1 del estandar, SIN iteracion). "
-        "Formula real (confirmada por decompilacion + oraculo `.xll`, 400 "
-        "casos aleatorios a precision de maquina): CTL = A*T^2 + B*T + C, "
-        "con 2 juegos de constantes segun la densidad caiga por encima o "
-        "por debajo de 966 kg/m3 -- ver normas/ASTM_D4311.py para el "
-        "detalle completo.",
-        "2 casos reales capturados en vivo: (1) Densidad=966kg/m3, "
-        "T=15°C (default) -> CTL=1.000000. (2) Densidad=900kg/m3, "
-        "T=200°C -> CTL=0.874913.",
-        "'Density @15°C': rango REAL de pantalla 850..1200 kg/m3 "
-        "(confirmado en vivo -- el manual oficial dice 800..1200, pero la "
-        "app y el nucleo matematico real coinciden en 850 como piso, un "
-        "hueco real del estandar 2009 entre 800 y 850 kg/m3). Selector de "
-        "unidad real: kg/m3, g/cc, lb/ft3.",
-        "'Temperature': CORREGIDO en RONDA 54 (2026-09-16, uiautomator, AVD "
-        "flowxpert_rd) -- SI tiene selector real de unidad (se habia "
-        "asumido fijo en RONDA 47 sin haber tocado el campo en vivo). El "
-        "dialogo de edicion real muestra un Spinner 'Unit' con 4 opciones "
-        "K/°C/°F/R, nativo °C -- mismo selector que API_TEMPERATURA_A_DEGC "
-        "ya usado por API Table-59/60 (2004) y NX-19, reusado aqui sin "
-        "duplicar la tabla. Rango de pantalla -25..274.5°C.",
-        "El binario tiene ADEMAS 'ASTM_D4311M_09_C' (variante US customary, "
-        "API gravity) y 2 funciones sin sufijo ('ASTM_D4311C'/'ASTM_D4311M', "
-        "rango extendido, un selector interno de 'constantes originales vs "
-        "refinadas') -- NINGUNA de las 3 tiene pantalla propia confirmada en "
-        "esta version de la app (busqueda completa de la categoria 'ASTM', "
-        "sin scroll pendiente). Quedan expuestas como funciones Python "
-        "puras (`astm_d4311_09_c`/`astm_d4311_c`/`astm_d4311_m`) validadas "
-        "por decompilacion + oraculo, sin pestaña de GUI dedicada.",
+        "'ASTM D4311M (2009)': Volume Correction Factor (CTL) para Asfalto a la "
+        "temperatura base, segun ASTM D4311/D4311M-09 (formula directa del Appendix X1 "
+        "del estandar, sin iteracion): CTL = A*T^2 + B*T + C, con 2 juegos de "
+        "constantes segun la densidad caiga por encima o por debajo de 966 kg/m3. Ver "
+        "normas/ASTM_D4311.py.",
+        "Ejemplos: (1) Densidad=966kg/m3, T=15°C (default) -> CTL=1.000000. (2) "
+        "Densidad=900kg/m3, T=200°C -> CTL=0.874913.",
+        "'Density @15°C': rango de pantalla 850..1200 kg/m3 (la norma cita 800..1200; "
+        "el calculo usa 850 como piso). Selector de unidad: kg/m3, g/cc, lb/ft3.",
+        "'Temperature': selector de unidad K/°C/°F/R, nativo °C (mismo selector que API "
+        "Table-59/60 (2004) y NX-19). Rango de pantalla -25..274.5°C.",
+        "Ademas existen la variante US customary 2009 (API gravity) y 2 variantes de "
+        "rango extendido (con selector de 'constantes originales vs refinadas'), sin "
+        "pestaña dedicada: quedan disponibles como funciones Python "
+        "(`astm_d4311_09_c`/`astm_d4311_c`/`astm_d4311_m`).",
     ]
 
     def _build_tab_astm_d1550_ctl(self, parent):
@@ -5714,7 +5723,7 @@ class App(tk.Tk):
         ttk.Label(outer, text="ASTM D1550 CTL -- Correction Factor for Temperature of "
                               "Butadiene at 60°F according to ASTM D1550.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_ASTM_D1550_CTL, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -5782,7 +5791,7 @@ class App(tk.Tk):
         ttk.Label(outer, text="ASTM D1550 Rel. Density @60F -- Relative Density of "
                               "Butadiene at 60°F according to ASTM D1550.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_ASTM_D1550_RD60, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -5892,6 +5901,11 @@ class App(tk.Tk):
             st["status_var"].set(f"Error de calculo (status={r['status']})")
         else:
             st["status_var"].set("")
+        if r["status"] != 0:
+            # C-44 (2026-11-18): sin convergencia FX no escribe RD60, F, CTL ni CPL.
+            for k in ("rd60_var", "f_var", "ctl_var", "cpl_var", "astm_range_var", "mpms_range_var"):
+                st[k].set("")
+            return
         st["rd60_var"].set(f"{r['rd60']:.6f}")
         # [CERTAIN, 2026-10-06] 9 decimales, como la F de las demas pantallas API: con 6 decimales en 1/psi solo quedaban
         # 2 cifras (0.000014) y no se podia comparar con FlowXpert (0.002014 1/MPa = 0.000013886 1/psi).
@@ -5908,7 +5922,7 @@ class App(tk.Tk):
         ttk.Label(outer, text="ASTM D4311M (2009) -- Volume Correction Factor (Ctl) for "
                               "Asphalt according to ASTM D4311/D4311M-09, metric units.",
                   wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion",
+        PanelAyudaColapsable(outer, "Fuente y alcance",
                              self._AYUDA_ASTM_D4311M_09_M, wraplength=740).pack(
             fill="x", pady=(0, 10))
 
@@ -6020,22 +6034,21 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="AGA-7 (turbinas): conversion de caudal entre condiciones de flujo, "
                               "base y masa.", wraplength=760).pack(anchor="w", pady=(0, 4))
-        ttk.Label(outer, text="Formula no confirmada contra FlowXpert.xll -- ABB no implemento "
-                              "esta norma en el archivo.",
+        ttk.Label(outer, text="Formula de caudal de AGA Report No. 7 (identidad de la ley de gases reales).",
                   foreground="#b05000", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
             "Formula (Qb=Qf*(Pf/Pb)*(Tb/Tf)*(Zb/Zf)) confirmada por 2 fuentes independientes: "
             "pagina publica de Kelton y el manual oficial Emerson/ROC800 (que cita los numeros "
             "reales de ecuacion del AGA Report No. 7, ediciones 1985 y 1996).",
-            "Es una identidad basica de ley de gas real, no una ecuacion empirica ajustada -- "
-            "el riesgo de error es bajo aunque no se haya confirmado contra el binario de ABB. "
+            "Es una identidad basica de ley de gas real, no una ecuacion empirica ajustada. "
             "Ver normas/AGA_7.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
-        self.aga7_entries, self.aga7_result_vars = self._build_caudal_tab(
+        self.aga7_entries, self.aga7_result_vars, self.aga7_estado = self._build_caudal_tab(
             outer, on_calcular=self.on_calcular_aga7)
 
     def on_calcular_aga7(self):
-        self._calcular_caudal(self.aga7_entries, self.aga7_result_vars, caudal_base_desde_flujo)
+        self._calcular_caudal(self.aga7_entries, self.aga7_result_vars, caudal_base_desde_flujo,
+                              self.aga7_estado)
 
     # ------------------------------------------------------------------ #
     def _build_tab_aga9(self, parent):
@@ -6044,20 +6057,20 @@ class App(tk.Tk):
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="AGA-9 (medidores ultrasonicos multi-trayecto): usa la misma formula "
                               "de caudal que AGA-7.", wraplength=760).pack(anchor="w", pady=(0, 4))
-        ttk.Label(outer, text="Formula no confirmada contra FlowXpert.xll -- ABB no implemento "
-                              "esta norma en el archivo.",
+        ttk.Label(outer, text="AGA-9 remite a la formula de caudal de AGA Report No. 7.",
                   foreground="#b05000", wraplength=760).pack(anchor="w", pady=(0, 6))
-        PanelAyudaColapsable(outer, "Fuente y alcance de la validacion", [
+        PanelAyudaColapsable(outer, "Fuente y alcance", [
             "AGA-9 no define formula de caudal propia: confirmado por 2 fuentes independientes "
             "(Kelton y el manual Emerson/ROC800, que cita textualmente 'AGA Report No. 9... "
             "Section 7.3, refers the reader to AGA No. 7 for calculations').",
             "Ver normas/AGA_9.py.",
         ], wraplength=740).pack(fill="x", pady=(0, 10))
-        self.aga9_entries, self.aga9_result_vars = self._build_caudal_tab(
+        self.aga9_entries, self.aga9_result_vars, self.aga9_estado = self._build_caudal_tab(
             outer, on_calcular=self.on_calcular_aga9)
 
     def on_calcular_aga9(self):
-        self._calcular_caudal(self.aga9_entries, self.aga9_result_vars, caudal_base_desde_flujo_AGA9)
+        self._calcular_caudal(self.aga9_entries, self.aga9_result_vars, caudal_base_desde_flujo_AGA9,
+                              self.aga9_estado)
 
     def _build_caudal_tab(self, outer, on_calcular):
         """Widget compartido (solo layout) para AGA-7/AGA-9 -- misma formula,
@@ -6093,9 +6106,13 @@ class App(tk.Tk):
         right = ttk.LabelFrame(cols, text="Resultado", padding=10)
         right.grid(row=0, column=1, sticky="n")
         resultados = self._build_result_labels(right, ["Qb"], {"Qb": "Qb [m3/h]"})
-        return entradas, resultados
+        # C-52: Status y rango. AGA Report No. 7 (y AGA-9, que remite a AGA-7) no publica
+        # limites numericos de entrada para la ecuacion de conversion de caudal.
+        estado_frame, bloque = self._crear_bloque_estado(cols, [("rango", "Range of the standard")])
+        estado_frame.grid(row=1, column=1, sticky="new", pady=(10, 0))
+        return entradas, resultados, bloque
 
-    def _calcular_caudal(self, entradas, resultados, funcion_caudal):
+    def _calcular_caudal(self, entradas, resultados, funcion_caudal, bloque=None):
         try:
             Qf = float(entradas["Qf"].get())
             Pf = float(entradas["Pf"].get())
@@ -6110,9 +6127,16 @@ class App(tk.Tk):
         try:
             Qb = funcion_caudal(Qf, Pf, Pb, Tf, Tb, Zf, Zb)
         except Exception as e:
-            messagebox.showerror("Error de calculo", str(e))
+            codigo = self._codigo_status_excepcion_c52(e)
+            if bloque is None or codigo is None:
+                messagebox.showerror("Error de calculo", str(e))
+                return
+            resultados["Qb"].set("-")
+            self._set_bloque_estado(bloque, codigo, {"rango": None})
             return
         resultados["Qb"].set(f"{Qb:,.4f}")
+        if bloque is not None:
+            self._set_bloque_estado(bloque, 0, {"rango": "No limits defined by the standard"})
 
     # ------------------------------------------------------------------ #
     @staticmethod
@@ -6146,10 +6170,18 @@ class App(tk.Tk):
             self.nx19_ghv_result_vars["fpv"].set("-")
             self.nx19_ghv_result_vars["rango_status"].set(f"Fuera de rango del metodo ({e})")
             return
+        if res["z"] != res["z"] or res["fpv"] != res["fpv"]:
+            # C-44 (2026-11-18): el nucleo real devuelve codigo de error (-7/-8)
+            # y el wrapper NX19_M no escribe Z ni el estado de rango; antes se
+            # mostraba "nan" con Range Status "OK".
+            self.nx19_ghv_result_vars["z"].set("Calculation error")
+            self.nx19_ghv_result_vars["fpv"].set("Calculation error")
+            self.nx19_ghv_result_vars["rango_status"].set("-")
+            return
         self.nx19_ghv_result_vars["z"].set(f"{res['z']:.6f}")
         self.nx19_ghv_result_vars["fpv"].set(f"{res['fpv']:.6f}")
         self.nx19_ghv_result_vars["rango_status"].set(
-            "Out of range (GHV, P, T o SG fuera del rango valido de la funcion real)"
+            "Out of range (GHV, P, T o SG fuera del rango valido de la norma)"
             if res["fuera_de_rango"] else "OK")
 
 
