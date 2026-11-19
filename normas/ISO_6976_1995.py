@@ -873,18 +873,46 @@ def validar_rango_iso6976_1995(fracciones_molares: dict) -> dict:
 
     en_rango = len(fuera_de_rango) == 0
     if en_rango:
-        mensaje = "Composicion dentro de los rangos oficiales de ISO6976:1995_M (manual ABB SpiritIT p.119)."
+        mensaje = "Composicion dentro de los rangos oficiales de ISO 6976:1995."
     else:
         detalle = "; ".join(
             f"{nombre}={x:.4f} mol/mol (rango oficial {lo}..{hi})"
             for nombre, x, (lo, hi) in fuera_de_rango
         )
         mensaje = (
-            "ADVERTENCIA informativa (NO bloqueante, la app real tampoco "
-            f"bloquea): fuera del rango oficial ISO6976:1995_M -- {detalle}."
+            "ADVERTENCIA informativa (NO bloqueante): fuera del rango oficial "
+            f"ISO 6976:1995: {detalle}."
         )
 
     return {"en_rango": en_rango, "fuera_de_rango": fuera_de_rango, "mensaje": mensaje}
+
+
+def data_range_iso6976_1995(fracciones_molares: dict) -> dict:
+    """C-52 (2026-11-19): salida "Data range" de la funcion ISO 6976:1995 (manual
+    de funciones, pagina 119, seccion Boundaries), aplicada como en el nucleo de
+    calculo (mismo chequeo que ISO 6976 ex 1995): sobre la composicion
+    NORMALIZADA, Metano < 0.5, Etano o CO2 > 0.15, Nitrogeno > 0.3 o cualquier
+    otro componente > 0.05 da "Out of Range". A diferencia de
+    `validar_rango_iso6976_1995`, un Metano igual a 0 tambien queda fuera de
+    rango. Solo informa: no cambia ningun valor calculado.
+
+    Devuelve {"codigo": 0 (In Range) o 1 (Out of Range), "componentes": [...]}.
+    """
+    total = sum(fracciones_molares.values())
+    fuera = []
+    for nombre, x in fracciones_molares.items():
+        xn = x / total if total > 0 else x
+        if nombre == "Metano":
+            mal = xn < 0.5
+        elif nombre in ("Etano", "CO2"):
+            mal = xn > 0.15
+        elif nombre == "Nitrogeno":
+            mal = xn > 0.3
+        else:
+            mal = xn > 0.05
+        if mal:
+            fuera.append(nombre)
+    return {"codigo": 1 if fuera else 0, "componentes": fuera}
 
 
 

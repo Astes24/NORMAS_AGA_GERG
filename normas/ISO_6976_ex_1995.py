@@ -881,17 +881,17 @@ TABLA_CONSTANTES_EX1995 = {
     # --- 33 componentes NUEVOS (ver seccion 3 del docstring, LIKELY/GUESSING
     #     el nombre/isomero exacto, CERTAIN la formula/masa molar) ---
     "2-metilpentano":    {"Mj": 86.177,  "bj": [0.3194, 0.2933, 0.272],
-                           "Hoj_bruto": [4187.32, None, None, None],
-                           "Hoj_neto":  [3879.21, None, None, None]},
+                           "Hoj_bruto": [4187.32, 4188.95, 4190.62, 4195.61],
+                           "Hoj_neto":  [3879.21, 3879.38, 3879.59, 3880.09]},
     "3-metilpentano":    {"Mj": 86.177,  "bj": [0.3194, 0.2881, 0.2683],
-                           "Hoj_bruto": [4189.90, None, None, None],
-                           "Hoj_neto":  [3881.79, None, None, None]},
+                           "Hoj_bruto": [4189.9, 4191.54, 4193.22, 4198.24],
+                           "Hoj_neto":  [3881.79, 3881.97, 3882.19, 3882.72]},
     "2,2-dimetilbutano": {"Mj": 86.177,  "bj": [0.2898, 0.2627, 0.255],
-                           "Hoj_bruto": [4177.52, None, None, None],
-                           "Hoj_neto":  [3869.41, None, None, None]},
+                           "Hoj_bruto": [4177.52, 4179.15, 4180.83, 4185.84],
+                           "Hoj_neto":  [3869.41, 3869.59, 3869.8, 3870.32]},
     "2,3-dimetilbutano": {"Mj": 86.177,  "bj": [0.3, 0.2739, 0.2569],
-                           "Hoj_bruto": [4185.28, None, None, None],
-                           "Hoj_neto":  [3877.17, None, None, None]},
+                           "Hoj_bruto": [4185.28, 4186.93, 4188.6, 4193.63],
+                           "Hoj_neto":  [3877.17, 3877.36, 3877.57, 3878.11]},
     "n-Heptano":         {"Mj": 100.204, "bj": [0.4123, 0.3661, 0.3521],
                            "Hoj_bruto": [4853.43, 4855.29, 4857.18, 4862.87],
                            "Hoj_neto":  [4501.30, 4501.49, 4501.72, 4502.28]},
@@ -905,42 +905,42 @@ TABLA_CONSTANTES_EX1995 = {
                            "Hoj_bruto": [6829.77, 6832.31, 6834.90, 6842.69],
                            "Hoj_neto":  [6345.59, 6345.85, 6346.14, 6346.88]},
     "Etileno":           {"Mj": 28.054,  "bj": [0.0866, 0.08, 0.0775],
-                           "Hoj_bruto": [1411.18, None, None, None],
-                           "Hoj_neto":  [1323.15, None, None, None]},
+                           "Hoj_bruto": [1411.18, 1411.65, 1412.11, 1413.51],
+                           "Hoj_neto":  [1323.15, 1323.2, 1323.24, 1323.36]},
     "Propileno":         {"Mj": 42.081,  "bj": [0.1378, 0.1265, 0.1225],
-                           "Hoj_bruto": [2058.02, None, None, None],
-                           "Hoj_neto":  [1925.97, None, None, None]},
+                           "Hoj_bruto": [2058.02, 2058.72, 2059.43, 2061.57],
+                           "Hoj_neto":  [1925.97, 1926.05, 1926.13, 1926.35]},
     "1-Buteno":          {"Mj": 56.108,  "bj": [0.1871, 0.1732, 0.1673],
-                           "Hoj_bruto": [2716.82, None, None, None],
-                           "Hoj_neto":  [2540.76, None, None, None]},
+                           "Hoj_bruto": [2716.82, 2717.75, 2718.7, 2721.55],
+                           "Hoj_neto":  [2540.76, 2540.86, 2540.97, 2541.25]},
     "cis-2-Buteno":      {"Mj": 56.108,  "bj": [0.1975, 0.1817, 0.1761],
-                           "Hoj_bruto": [2710.00, None, None, None],
-                           "Hoj_neto":  [2533.90, None, None, None]},
+                           "Hoj_bruto": [2710.0, 2711.0, 2711.9, 2714.9],
+                           "Hoj_neto":  [2533.9, 2534.1, 2534.2, 2534.6]},
     "trans-2-Buteno":    {"Mj": 56.108,  "bj": [0.1975, 0.1789, 0.1761],
-                           "Hoj_bruto": [2706.40, None, None, None],
-                           "Hoj_neto":  [2530.30, None, None, None]},
+                           "Hoj_bruto": [2706.4, 2707.4, 2708.3, 2711.1],
+                           "Hoj_neto":  [2530.3, 2530.5, 2530.5, 2530.8]},
     "Isobutileno":       {"Mj": 56.108,  "bj": [0.1871, 0.1703, 0.1673],
-                           "Hoj_bruto": [2700.20, None, None, None],
-                           "Hoj_neto":  [2524.10, None, None, None]},
+                           "Hoj_bruto": [2700.2, 2701.1, 2702.0, 2704.8],
+                           "Hoj_neto":  [2524.1, 2524.2, 2524.3, 2524.5]},
     "1-Penteno":         {"Mj": 70.134,  "bj": [0.249, 0.2258, 0.2191],
-                           "Hoj_bruto": [3375.42, None, None, None],
-                           "Hoj_neto":  [3155.34, None, None, None]},
+                           "Hoj_bruto": [3375.42, 3376.57, 3377.75, 3381.29],
+                           "Hoj_neto":  [3155.34, 3155.45, 3155.59, 3155.92]},
     "Propadieno":        {"Mj": 40.065,  "bj": [0.1414, 0.1304, 0.1265],
-                           "Hoj_bruto": [1943.11, None, None, None],
-                           "Hoj_neto":  [1855.08, None, None, None]},
+                           "Hoj_bruto": [1943.11, 1943.53, 1943.96, 1945.25],
+                           "Hoj_neto":  [1855.08, 1855.08, 1855.09, 1855.1]},
     # [CORREGIDO 2026-08-07, ver seccion 5 del docstring] los nombres 1,2-/1,3-
     # Butadieno estaban INTERCAMBIADOS -- confirmado por la tabla real de
     # nombres embebida en el binario (fila25=1,2-Butadieno, fila26=
     # 1,3-Butadieno). Los valores numericos NO cambiaron, solo las etiquetas.
     "1,2-Butadieno":     {"Mj": 54.092,  "bj": [0.2121, 0.1924, 0.1871],
-                           "Hoj_bruto": [2593.79, None, None, None],
-                           "Hoj_neto":  [2461.74, None, None, None]},
+                           "Hoj_bruto": [2593.79, 2594.45, 2595.12, 2597.13],
+                           "Hoj_neto":  [2461.74, 2461.78, 2461.82, 2461.91]},
     "1,3-Butadieno":     {"Mj": 54.092,  "bj": [0.1844, 0.1703, 0.1643],
-                           "Hoj_bruto": [2540.77, None, None, None],
-                           "Hoj_neto":  [2408.72, None, None, None]},
+                           "Hoj_bruto": [2540.77, 2541.43, 2542.1, 2544.13],
+                           "Hoj_neto":  [2408.72, 2408.76, 2408.8, 2408.91]},
     "Acetileno":         {"Mj": 26.038,  "bj": [0.0949, 0.0837, 0.0837],
-                           "Hoj_bruto": [1301.05, None, None, None],
-                           "Hoj_neto":  [1257.03, None, None, None]},
+                           "Hoj_bruto": [1301.05, 1301.21, 1301.37, 1301.86],
+                           "Hoj_neto":  [1257.03, 1256.98, 1256.94, 1256.79]},
     # [RENOMBRADOS 2026-08-07, ver seccion 5 del docstring] "2-Penteno",
     # "Hexeno", "Hepteno" y "Octeno" eran GUESSING por formula quimica
     # (C5H10/C6H12/C7H14/C8H16 podian ser alqueno de cadena recta O cicloalcano
@@ -950,44 +950,44 @@ TABLA_CONSTANTES_EX1995 = {
     # Etilciclohexano), NO alquenos de cadena recta -- los valores numericos
     # (Mj/bj/Hoj) NO cambiaron, solo la etiqueta/nombre.
     "Ciclopentano":      {"Mj": 70.134,  "bj": [0.255, 0.2302, 0.2236],
-                           "Hoj_bruto": [3319.59, None, None, None],
-                           "Hoj_neto":  [3099.51, None, None, None]},
+                           "Hoj_bruto": [3319.59, 3320.88, 3322.19, 3326.14],
+                           "Hoj_neto":  [3099.51, 3099.76, 3100.03, 3100.77]},
     "Metilciclopentano": {"Mj": 84.161,  "bj": [0.313, 0.2811, 0.2702],
-                           "Hoj_bruto": [3969.44, None, None, None],
-                           "Hoj_neto":  [3705.34, None, None, None]},
+                           "Hoj_bruto": [3969.44, 3970.93, 3972.46, 3977.04],
+                           "Hoj_neto":  [3705.34, 3705.59, 3705.86, 3706.6]},
     "Etilciclopentano":  {"Mj": 98.188,  "bj": [0.3987, 0.3521, 0.3391],
-                           "Hoj_bruto": [4628.47, None, None, None],
-                           "Hoj_neto":  [4320.36, None, None, None]},
+                           "Hoj_bruto": [4628.47, 4630.19, 4631.95, 4637.27],
+                           "Hoj_neto":  [4320.36, 4320.63, 4320.92, 4321.75]},
     "Ciclohexano":       {"Mj": 84.161,  "bj": [0.3209, 0.2864, 0.2757],
-                           "Hoj_bruto": [3952.96, None, None, None],
-                           "Hoj_neto":  [3688.86, None, None, None]},
+                           "Hoj_bruto": [3952.96, 3954.47, 3956.02, 3960.67],
+                           "Hoj_neto":  [3688.86, 3689.13, 3689.42, 3690.23]},
     "Metilciclohexano":  {"Mj": 98.188,  "bj": [0.3808, 0.3376, 0.3256],
-                           "Hoj_bruto": [4600.64, None, None, None],
-                           "Hoj_neto":  [4292.53, None, None, None]},
+                           "Hoj_bruto": [4600.64, 4602.35, 4604.09, 4609.34],
+                           "Hoj_neto":  [4292.53, 4292.78, 4293.06, 4293.82]},
     "Etilciclohexano":   {"Mj": 112.215, "bj": [0.4796, 0.4195, 0.4025],
-                           "Hoj_bruto": [5263.05, None, None, None],
-                           "Hoj_neto":  [4910.92, None, None, None]},
+                           "Hoj_bruto": [5263.05, 5264.98, 5266.95, 5272.88],
+                           "Hoj_neto":  [4910.92, 4911.19, 4911.49, 4912.29]},
     "Benceno":           {"Mj": 78.114,  "bj": [0.3017, 0.272, 0.253],
-                           "Hoj_bruto": [3301.43, None, None, None],
-                           "Hoj_neto":  [3169.38, None, None, None]},
+                           "Hoj_bruto": [3301.43, 3302.15, 3302.86, 3305.03],
+                           "Hoj_neto":  [3169.38, 3169.48, 3169.56, 3169.81]},
     "Tolueno":           {"Mj": 92.141,  "bj": [0.3886, 0.3421, 0.3286],
-                           "Hoj_bruto": [3947.89, None, None, None],
-                           "Hoj_neto":  [3771.83, None, None, None]},
+                           "Hoj_bruto": [3947.89, 3948.84, 3949.81, 3952.72],
+                           "Hoj_neto":  [3771.83, 3771.95, 3772.08, 3772.42]},
     # [RENOMBRADO 2026-08-07] "m-Xileno" era GUESSING; la tabla real de
     # nombres confirma "Etilbenceno" (Ethylbenzene, C8H10, mismo isomero
     # de formula que xileno pero compuesto distinto) -- valores sin cambio.
     "Etilbenceno":       {"Mj": 106.167, "bj": [0.4858, 0.4207, 0.4037],
-                           "Hoj_bruto": [4607.15, None, None, None],
-                           "Hoj_neto":  [4387.07, None, None, None]},
+                           "Hoj_bruto": [4607.15, 4608.32, 4609.53, 4613.14],
+                           "Hoj_neto":  [4387.07, 4387.2, 4387.37, 4387.77]},
     "o-Xileno":          {"Mj": 106.167, "bj": [0.5128, 0.4427, 0.4231],
-                           "Hoj_bruto": [4596.31, None, None, None],
-                           "Hoj_neto":  [4376.23, None, None, None]},
+                           "Hoj_bruto": [4596.31, 4597.46, 4598.64, 4602.17],
+                           "Hoj_neto":  [4376.23, 4376.34, 4376.48, 4376.8]},
     "Metanol":           {"Mj": 32.042,  "bj": [0.4764, 0.3578, 0.3286],
-                           "Hoj_bruto": [764.09, None, None, None],
-                           "Hoj_neto":  [676.06, None, None, None]},
+                           "Hoj_bruto": [764.09, 764.59, 765.09, 766.59],
+                           "Hoj_neto":  [676.06, 676.14, 676.22, 676.44]},
     "Metanotiol":        {"Mj": 48.109,  "bj": [0.1673, 0.1517, 0.1483],
-                           "Hoj_bruto": [1239.39, None, None, None],
-                           "Hoj_neto":  [1151.36, None, None, None]},
+                           "Hoj_bruto": [1239.39, 1239.83, 1240.28, 1241.63],
+                           "Hoj_neto":  [1151.36, 1151.39, 1151.41, 1151.48]},
     "Hidrogeno":         {"Mj": 2.0159,  "bj": [-0.004, -0.0048, -0.0051],
                            "Hoj_bruto": [285.83, 285.99, 286.15, 286.63],
                            "Hoj_neto":  [241.81, 241.76, 241.72, 241.56]},
@@ -998,26 +998,26 @@ TABLA_CONSTANTES_EX1995 = {
                            "Hoj_bruto": [562.01, 562.19, 562.38, 562.94],
                            "Hoj_neto":  [517.99, 517.97, 517.95, 517.87]},
     "Amoniaco":          {"Mj": 17.0306, "bj": [0.1225, 0.1095, 0.1049],
-                           "Hoj_bruto": [382.81, None, None, None],
-                           "Hoj_neto":  [316.79, None, None, None]},
+                           "Hoj_bruto": [382.81, 383.16, 383.51, 384.57],
+                           "Hoj_neto":  [316.79, 316.82, 316.86, 316.96]},
     "Acido cianhidrico": {"Mj": 27.026,  "bj": [0.3362, 0.2966, 0.2828],
-                           "Hoj_bruto": [671.50, None, None, None],
-                           "Hoj_neto":  [649.50, None, None, None]},
+                           "Hoj_bruto": [671.5, 671.6, 671.7, 671.9],
+                           "Hoj_neto":  [649.5, 649.5, 649.5, 649.4]},
     "CO":                {"Mj": 28.01,   "bj": [0.0265, 0.0224, 0.02],
                            "Hoj_bruto": [282.98, 282.95, 282.91, 282.80],
                            "Hoj_neto":  [282.98, 282.95, 282.91, 282.80]},
     "Sulfuro de carbonilo (COS)": {"Mj": 60.076, "bj": [0.1225, 0.114, 0.1095],
-                           "Hoj_bruto": [548.23, None, None, None],
-                           "Hoj_neto":  [548.23, None, None, None]},
+                           "Hoj_bruto": [548.23, 548.19, 548.15, 548.01],
+                           "Hoj_neto":  [548.23, 548.19, 548.15, 548.01]},
     "Disulfuro de carbono (CS2)": {"Mj": 76.143, "bj": [0.2145, 0.1949, 0.1871],
-                           "Hoj_bruto": [1104.49, None, None, None],
-                           "Hoj_neto":  [1104.49, None, None, None]},
+                           "Hoj_bruto": [1104.49, 1104.41, 1104.32, 1104.06],
+                           "Hoj_neto":  [1104.49, 1104.41, 1104.32, 1104.06]},
     "Helio":             {"Mj": 4.0026,  "bj": [0.0006, 0.0002, 0.0],
                            "Hoj_bruto": [0.0, 0.0, 0.0, 0.0],
                            "Hoj_neto":  [0.0, 0.0, 0.0, 0.0]},
     "Neon":              {"Mj": 20.1797, "bj": [0.0006, 0.0002, 0.0],
-                           "Hoj_bruto": [0.0, None, None, None],
-                           "Hoj_neto":  [0.0, None, None, None]},
+                           "Hoj_bruto": [0.0, 0.0, 0.0, 0.0],
+                           "Hoj_neto":  [0.0, 0.0, 0.0, 0.0]},
     "Argon":             {"Mj": 39.948,  "bj": [0.0316, 0.0283, 0.0265],
                            "Hoj_bruto": [0.0, 0.0, 0.0, 0.0],
                            "Hoj_neto":  [0.0, 0.0, 0.0, 0.0]},
@@ -1031,8 +1031,8 @@ TABLA_CONSTANTES_EX1995 = {
                            "Hoj_bruto": [0.0, 0.0, 0.0, 0.0],
                            "Hoj_neto":  [0.0, 0.0, 0.0, 0.0]},
     "Dioxido de azufre (SO2)": {"Mj": 64.065, "bj": [0.1549, 0.1449, 0.1414],
-                           "Hoj_bruto": [0.0, None, None, None],
-                           "Hoj_neto":  [0.0, None, None, None]},
+                           "Hoj_bruto": [0.0, 0.0, 0.0, 0.0],
+                           "Hoj_neto":  [0.0, 0.0, 0.0, 0.0]},
 }
 assert set(TABLA_CONSTANTES_EX1995) == set(ORDEN_COMPONENTES_EX1995) == \
     frozenset(ORDEN_COMPONENTES_EX1995), (
@@ -1040,15 +1040,11 @@ assert set(TABLA_CONSTANTES_EX1995) == set(ORDEN_COMPONENTES_EX1995) == \
     )
 assert len(TABLA_CONSTANTES_EX1995) == 55
 
-# NOTA: los valores `None` en Hoj_bruto/Hoj_neto (indices 1..3) corresponden a
-# combinaciones de temperatura de combustion que NO se extrajeron para las 33
-# filas nuevas en esta tarea (se prioriza el indice 0 porque es suficiente
-# para el autotest de consistencia interna de la seccion siguiente, que solo
-# usa componentes de los 22 ya CERTAIN). Si se necesita un indice distinto de
-# 0 para un componente nuevo, hay que volver al volcado de memoria (offset ya
-# documentado, seccion 2 del docstring) y extraer las columnas [8],[9],[10] /
-# [12],[13],[14] de esa fila -- trivial con el mismo script, no se hizo por
-# no ser necesario para el estado actual de esta tarea.
+# [C-39, 2026-11-17] Las 33 filas nuevas tenian `None` en Hoj_bruto/Hoj_neto
+# indices 1..3 (20, 15 y 0 C), lo que daba "Error de calculo" en conditions
+# 0, 1, 2 y 4 con cualquier componente extra. Se completaron con los valores
+# EXACTOS de la tabla del binario (FlowXpert.xll RVA 0x1D8300, identica a la
+# del .so en 0x31B400; columnas [7:11] y [11:15]). Ver normas/_iso6976_ex_tablas.py.
 
 
 def calcular_masa_molar_ex1995(fracciones_molares: dict) -> float:
@@ -1106,8 +1102,8 @@ def calcular_poder_calorifico_molar_ex1995(fracciones_molares: dict, tipo: str,
                                             indice_temp_combustion: int = 0) -> float:
     """Hm = sum(xj * Hoj[indice]), en kJ/mol, sobre 55 componentes.
 
-    [LIKELY, misma salvedad]. Por defecto usa indice 0 -- para las 33 filas
-    nuevas es el UNICO indice extraido en esta tarea (ver nota arriba).
+    Indice 0..3 = combustion a 25, 20, 15, 0 C (C-39: las 55 filas tienen los
+    4 valores del binario).
     """
     clave = "Hoj_bruto" if tipo == "bruto" else "Hoj_neto"
     total = 0.0
@@ -1133,6 +1129,137 @@ def calcular_volumen_molar_ideal_ex1995(t: float, p: float) -> float:
 def calcular_volumen_molar_real_ex1995(vm_ideal: float, z: float) -> float:
     """Vm_real = Vm_ideal * Z -- sin cambios respecto a `ISO_6976.py`."""
     return vm_ideal * z
+
+
+# =============================================================================
+# [C-39, 2026-11-17] Calculo completo de Math_ISO6976ex_1995_M tal como lo hace
+# FlowXpert (wrapper 0x1800AC218 + nucleo calculate_revision_1 0x1800CD480 del
+# .xll, leidos por desensamblado y verificados llamando al nucleo real):
+#   1. El wrapper NORMALIZA la composicion (0x1800C93AC): error si alguna
+#      fraccion < 0 o si la suma es ~0; si la suma no esta en [0.9999, 1.0001]
+#      ni en [99.99, 100.01] solo avisa (estado 4) y calcula igual.
+#   2. conditions 0..5 = 15/15, 0/0, 15/0, 25/0, 20/20, 25/20 C (combustion /
+#      metering); T metering 288.15 / 273.15 / 273.15 / 273.15 / 293.15 / 293.15 K.
+#   3. Densidad = M * 101.325 / (8.31451 * T * Z); densidad relativa =
+#      (M / 28.9626) * (Zaire / Z); Wobbe = Hs_vol / sqrt(d).
+#   4. cv_method 1 ("Definitive"): Hs_vol = Hs_molar * 101.325 / (R * T * Z),
+#      Hs_masa = Hs_molar / M. cv_method 2 ("Alternative"): Hs_vol =
+#      sum(x * Hs_vol_ideal_j) / Z y Hs_masa = sum(x * Mj * Hs_masa_j) / M.
+#   5. mm_method 1 ("Calculate") usa masas de pesos atomicos; 2 ("Use table")
+#      la columna Mj.
+# Verificado contra el nucleo real: ver informe C-39.
+# =============================================================================
+import math  # noqa: E402
+from ._iso6976_ex_tablas import (  # noqa: E402
+    EX1995_FILAS as _FILAS, EX1995_M_CALCULADA as _M_CALC, EX1995_CONDICIONES as _COND,
+    EX1995_ZAIRE as _ZAIRE, EX1995_M_AIRE as _M_AIRE, EX1995_R as R_GAS_EX1995,
+    EX1995_P_KPA as _P_KPA, ORDEN_EX1995 as _ORDEN_TABLA,
+)
+assert list(_ORDEN_TABLA) == list(ORDEN_COMPONENTES_EX1995)
+
+# Etiquetas de las 6 conditions (mismo orden que la entrada 1..6 del wrapper FX).
+ETIQUETAS_CONDITIONS_EX1995 = {
+    0: "15 / 15 / 15 C", 1: "0 / 0 / 0 C", 2: "15 / 0 / 0 C",
+    3: "25 / 0 / 0 C", 4: "20 / 20 / 20 C", 5: "25 / 20 / 20 C",
+}
+T_METERING_POR_CONDITIONS_EX1995 = {c: v[0] for c, v in _COND.items()}
+
+
+def normalizar_composicion_ex1995(fracciones_molares: dict):
+    """Normalizacion del wrapper FX (0x1800C93AC). Devuelve (dict normalizado, aviso o None)."""
+    total = 0.0
+    for c in ORDEN_COMPONENTES_EX1995:
+        x = fracciones_molares.get(c, 0.0)
+        if x < 0.0:
+            raise ValueError(f"Fraccion negativa para '{c}': no se calcula.")
+        total += x
+    if total * 1000000.0 < 1.0:
+        raise ValueError("La suma de la composicion es cero: no se calcula.")
+    norm = {c: fracciones_molares.get(c, 0.0) / total for c in ORDEN_COMPONENTES_EX1995}
+    aviso = None
+    if not (0.9999 <= total <= 1.0001 or 99.99 <= total <= 100.01):
+        aviso = f"Suma de la composicion = {total:.6g} (fuera de 1 +/- 0.0001): se normalizo."
+    return norm, aviso
+
+
+def calcular_iso6976_ex1995(fracciones_molares: dict, conditions: int = 0,
+                            molar_mass_method: int = 2, cv_method: int = 1) -> dict:
+    """Todas las salidas de Math_ISO6976ex_1995_M (ver bloque C-39 arriba).
+
+    conditions 0..5; molar_mass_method 1 = Calculate, 2 = Use table;
+    cv_method 1 = Definitive, 2 = Alternative. Densidades en kg/m3, poderes
+    calorificos en MJ/m3, MJ/kg y kJ/mol.
+    """
+    if conditions not in _COND:
+        raise ValueError("conditions debe estar entre 0 y 5.")
+    if molar_mass_method not in (1, 2) or cv_method not in (1, 2):
+        raise ValueError("molar_mass_method y cv_method deben ser 1 o 2.")
+    comp, aviso = normalizar_composicion_ex1995(fracciones_molares)
+    t, i_b, i_h, i_v = _COND[conditions]
+    x = [comp[c] for c in ORDEN_COMPONENTES_EX1995]
+    m_j = [f[0] for f in _FILAS] if molar_mass_method == 2 else list(_M_CALC)
+
+    mmix = 0.0
+    for xj, mj in zip(x, m_j):
+        mmix += mj * xj
+    suma_b = 0.0
+    for xj, f in zip(x, _FILAS):
+        suma_b += f[4 + i_b] * xj
+    z = 1.0 - suma_b * suma_b
+    rt = R_GAS_EX1995 * t
+    densidad = mmix * 1.01325 * 100.0 / rt / z
+    dens_rel = (_ZAIRE[i_b] / z) * (mmix / _M_AIRE)
+    hs_mol = 0.0
+    hi_mol = 0.0
+    for xj, f in zip(x, _FILAS):
+        hs_mol += f[7 + i_h] * xj
+        hi_mol += f[11 + i_h] * xj
+    if cv_method == 1:
+        rtz = rt * z
+        hs_vol = hs_mol * 1.01325 * 100.0 / rtz
+        hi_vol = hi_mol * 1.01325 * 100.0 / rtz
+        hs_masa = hs_mol / mmix
+        hi_masa = hi_mol / mmix
+    else:
+        hs_vol = hi_vol = hs_masa = hi_masa = 0.0
+        for xj, mj, f in zip(x, m_j, _FILAS):
+            w = xj * mj / mmix
+            hs_masa += w * f[15 + i_h]
+            hi_masa += w * f[19 + i_h]
+            hs_vol += f[23 + i_v] * xj / z
+            hi_vol += f[29 + i_v] * xj / z
+    wobbe = hs_vol / math.sqrt(dens_rel)
+
+    # Chequeo de rango del nucleo (estado 4, no bloquea): metano < 0.5,
+    # etano > 0.15, N2 > 0.3, CO2 > 0.15, resto > 0.05.
+    fuera = []
+    for c, xj in zip(ORDEN_COMPONENTES_EX1995, x):
+        if c == "Metano":
+            mal = xj < 0.5
+        elif c in ("Etano", "CO2"):
+            mal = xj > 0.15
+        elif c == "Nitrogeno":
+            mal = xj > 0.3
+        else:
+            mal = xj > 0.05
+        if mal:
+            fuera.append(c)
+    return {
+        "Molar Mass (g/mol)": mmix,
+        "Compressibility (Z)": z,
+        "Density (kg/m3)": densidad,
+        "Relative Density": dens_rel,
+        "Sup. Calorific Val. (MJ/m3)": hs_vol,
+        "Sup. Calorific Val. (MJ/kg)": hs_masa,
+        "Sup. Calorific Val. (kJ/mol)": hs_mol,
+        "Inf. Calorific Val. (MJ/m3)": hi_vol,
+        "Inf. Calorific Val. (MJ/kg)": hi_masa,
+        "Inf. Calorific Val. (kJ/mol)": hi_mol,
+        "Indice de Wobbe (MJ/m3)": wobbe,
+        "T metering (K)": t,
+        "aviso_normalizacion": aviso,
+        "fuera_de_rango": fuera,
+    }
 
 
 def _autotest_consistencia_interna():

@@ -2430,7 +2430,7 @@ def validar_rango_iso6976_2016(p_ref_bar: float, z: float) -> dict:
     en_rango = presion_en_rango and z_en_rango
 
     if en_rango:
-        mensaje = "Presion y Compresibilidad dentro de los rangos oficiales de ISO6976:2016_M (manual ABB SpiritIT p.120)."
+        mensaje = "Presion y Compresibilidad dentro de los rangos oficiales de ISO 6976:2016."
     else:
         partes = []
         if not presion_en_rango:
@@ -2438,8 +2438,8 @@ def validar_rango_iso6976_2016(p_ref_bar: float, z: float) -> dict:
         if not z_en_rango:
             partes.append(f"Compresibilidad Z={z:.6f} (rango oficial Z > {Z_MINIMO_VALIDO_2016_M})")
         mensaje = (
-            "ADVERTENCIA informativa (NO bloqueante, la app real tampoco "
-            f"bloquea): fuera del rango oficial ISO6976:2016_M -- {'; '.join(partes)}."
+            "ADVERTENCIA informativa (NO bloqueante): fuera del rango oficial "
+            f"ISO 6976:2016: {'; '.join(partes)}."
         )
 
     return {
@@ -2448,6 +2448,56 @@ def validar_rango_iso6976_2016(p_ref_bar: float, z: float) -> dict:
         "z_en_rango": z_en_rango,
         "mensaje": mensaje,
     }
+
+
+# -----------------------------------------------------------------------------
+# C-52 (2026-11-19): salidas "Status" y "Data range" de la funcion ISO 6976:2016
+# (manual de funciones, pagina 120) para la pantalla. Solo informan: NO cambian
+# ningun valor calculado.
+# - Status 1 "Input argument out of range": alguna fraccion < 0 o > 1, o
+#   presion de referencia de metering fuera de 0 < p <= 200 kPa (campo de
+#   entrada 0..2 bar; con p <= 0 o p > 200 kPa el nucleo no calcula).
+# - Status 3 "Mole fractions do not add up to 1.0 +- 0.0001": |suma - 1| > 1e-4.
+# - Data range 1 "Out of Range": p fuera de 90..110 kPa (limites INCLUSIVOS,
+#   comprobado en el nucleo: 90 y 110 kPa dan 0; el texto del manual dice
+#   0.9 < p < 1.1 bar) o Z <= 0.9.
+# -----------------------------------------------------------------------------
+TOLERANCIA_SUMA_COMPOSICION_ISO6976 = 1e-4
+
+
+def estado_composicion_iso6976(fracciones_molares: dict) -> int:
+    """Codigo de Status por composicion (fracciones mol/mol, sin normalizar):
+    0 = Normal, 1 = Input argument out of range (fraccion < 0 o > 1),
+    2 = Calculation error (todas las fracciones en 0),
+    3 = Mole fractions do not add up to 1.0 +- 0.0001."""
+    valores = list(fracciones_molares.values())
+    if any(x < 0.0 or x > 1.0 for x in valores):
+        return 1
+    if sum(valores) == 0.0:
+        return 2  # composicion vacia: la funcion de referencia devuelve "Calculation error"
+    if abs(sum(valores) - 1.0) > TOLERANCIA_SUMA_COMPOSICION_ISO6976 + 1e-12:
+        return 3
+    return 0
+
+
+def estado_iso6976_2016(fracciones_molares: dict, p_ref_kpa: float) -> int:
+    """Status de ISO 6976:2016 (ver bloque C-52 arriba). Mismo orden que la
+    funcion de referencia: primero la composicion, despues la presion."""
+    codigo = estado_composicion_iso6976(fracciones_molares)
+    if codigo != 0:
+        return codigo
+    if not (0.0 < p_ref_kpa <= 200.0):
+        return 1
+    return 0
+
+
+def data_range_iso6976_2016(p_ref_kpa: float, z: float) -> int:
+    """Salida "Data range" de ISO 6976:2016: 0 = In Range, 1 = Out of Range."""
+    if not (90.0 <= p_ref_kpa <= 110.0):
+        return 1
+    if not (z > Z_MINIMO_VALIDO_2016_M):
+        return 1
+    return 0
 
 
 def _autotest_caso_real_flowxpert():

@@ -936,6 +936,125 @@ def calcular_volumen_molar_real_ex2016(vm_ideal: float, z: float) -> float:
     return vm_ideal * z
 
 
+# =============================================================================
+# [C-39, 2026-11-17] Calculo de Math_ISO6976ex_2016_M tal como lo hace FlowXpert.
+# Desensamblado de FlowXpert.xll: los wrappers de ISO6976_2016_M (0x1800AB9D4) y
+# de ISO6976ex_2016_M (0x1800AC858) construyen el MISMO objeto de entrada (ctor
+# 0x1800CC820) y llaman al MISMO calculo (0x1800CD1C8). Por eso esta variante
+# usa las formulas ya validadas de la pestana ISO 6976 (2016)
+# (`ISO_6976.calcular_factor_compresion_suma_2016` y siguientes), con las tablas
+# ampliadas a 60 componentes que carga el ctor (normas/_iso6976_ex_tablas.py):
+#   Z = 1 - (p / 101.325 kPa) * (sum x s)^2, columna de s por T de metering
+#   (0, 15, 15.55 = 60 F, 20 C); Hs por T de combustion (0, 15, 15.55, 20, 25 C);
+#   M con los decimales del binario.
+# Diferencia con la 2016 base: el wrapper "ex" NO normaliza; suma las fracciones
+# y, si la suma no esta en [0.9999, 1.0001] o alguna fraccion no esta en [0, 1],
+# devuelve estado de error y no calcula. El ctor rechaza p < 0 o p > 200 kPa
+# (avisa fuera de 90..110 kPa).
+# Las funciones `calcular_*_ex2016` de arriba (sqrt(bj), p/(R*T0), indice fijo)
+# quedan como LEGADO: no reproducen a FlowXpert y la interfaz ya no las usa.
+# =============================================================================
+from ._iso6976_ex_tablas import (  # noqa: E402
+    EX2016_M, EX2016_S, EX2016_HS, ORDEN_EX2016 as _ORDEN_TABLA_2016,
+)
+from .ISO_6976 import (  # noqa: E402  (constantes ya validadas de la 2016 base, solo lectura)
+    R_GAS_2016, L_AGUA_ISO6976_2016, BAIR_TABLA, M_AIRE, PRESION_REF_AIRE_KPA,
+)
+assert list(_ORDEN_TABLA_2016) == list(ORDEN_COMPONENTES_EX2016)
+
+# reference_conditions (1..7, mismo selector que la 2016 base) ->
+# (etiqueta, T metering K, columna s, T combustion C, columna Hs, indice aire)
+REFERENCE_CONDITIONS_EX2016 = {
+    1: ("15/15/15", 288.15, 1, 15.0, 1, 2),
+    2: ("0/0/0", 273.15, 0, 0.0, 0, 1),
+    3: ("15/0/0", 273.15, 0, 15.0, 1, 1),
+    4: ("25/0/0", 273.15, 0, 25.0, 4, 1),
+    5: ("20/20/20", 293.15, 3, 20.0, 3, 4),
+    6: ("25/20/20", 293.15, 3, 25.0, 4, 4),
+    7: ("60F/60F/60F", 288.70555559999997, 2, 15.55, 2, 3),  # 60 F: double exacto del binario
+}
+
+# Atomos de H por molecula (para el poder calorifico inferior: Hi = Hs - sum x (H/2) L).
+ATOMOS_H_EX2016 = {
+    "Metano": 4, "Etano": 6, "Propano": 8, "n-Butano": 10, "i-Butano": 10, "n-Pentano": 12,
+    "i-Pentano": 12, "neo-Pentano": 12, "n-Hexano": 14, "2-metilpentano": 14, "3-metilpentano": 14,
+    "2,2-dimetilbutano": 14, "2,3-dimetilbutano": 14, "n-Heptano": 16, "n-Octano": 18, "n-Nonano": 20,
+    "n-Decano": 22, "Etileno": 4, "Propileno": 6, "1-Buteno": 8, "cis-2-Buteno": 8,
+    "trans-2-Buteno": 8, "Isobutileno": 8, "1-Penteno": 10, "Propadieno": 4, "1,2-Butadieno": 6,
+    "1,3-Butadieno": 6, "Acetileno": 2, "Ciclopentano": 10, "Metilciclopentano": 12,
+    "Etilciclopentano": 14, "Ciclohexano": 12, "Metilciclohexano": 14, "Etilciclohexano": 16,
+    "Benceno": 6, "Tolueno": 8, "Etilbenceno": 10, "o-Xileno": 10, "Metanol": 4, "Metanotiol": 4,
+    "Hidrogeno": 2, "Agua": 2, "H2S": 2, "Amoniaco": 3, "Acido cianhidrico": 1, "CO": 0,
+    "Sulfuro de carbonilo (COS)": 0, "Disulfuro de carbono (CS2)": 0, "Helio": 0, "Neon": 0,
+    "Argon": 0, "Nitrogeno": 0, "Oxigeno": 0, "CO2": 0, "Dioxido de azufre (SO2)": 0,
+    "Undecano": 24, "Dodecano": 26, "Tridecano": 28, "Tetradecano": 30, "Pentadecano": 32,
+}
+assert set(ATOMOS_H_EX2016) == set(ORDEN_COMPONENTES_EX2016)
+
+
+def validar_composicion_ex2016(fracciones_molares: dict) -> float:
+    """Chequeo del wrapper FX: cada fraccion en [0, 1] y suma en [0.9999, 1.0001]. Devuelve la suma."""
+    total = 0.0
+    for c in ORDEN_COMPONENTES_EX2016:
+        x = fracciones_molares.get(c, 0.0)
+        if x < 0.0 or x > 1.0:
+            raise ValueError(f"Fraccion de '{c}' = {x:.6g} fuera de [0, 1]: no se calcula.")
+        total += x
+    if not (0.9999 <= total <= 1.0001):
+        raise ValueError(
+            f"La suma de la composicion es {total:.6f} (debe estar entre 0.9999 y 1.0001, "
+            "es decir 99.99 % a 100.01 %): esta variante no normaliza y no calcula.")
+    return total
+
+
+def calcular_iso6976_ex2016(fracciones_molares: dict, reference_conditions: int = 1,
+                            p_ref_kpa: float = 101.325) -> dict:
+    """Todas las salidas de Math_ISO6976ex_2016_M (fracciones molares, sin normalizar)."""
+    if reference_conditions not in REFERENCE_CONDITIONS_EX2016:
+        raise ValueError("reference_conditions debe estar entre 1 y 7.")
+    if p_ref_kpa < 0.0 or p_ref_kpa > 200.0:
+        raise ValueError(f"Presion de referencia {p_ref_kpa:.6g} kPa fuera de 0..200 kPa: no se calcula.")
+    validar_composicion_ex2016(fracciones_molares)
+    _et, t, col_s, t_comb, col_hs, idx_aire = REFERENCE_CONDITIONS_EX2016[reference_conditions]
+    comp = [(c, fracciones_molares.get(c, 0.0)) for c in ORDEN_COMPONENTES_EX2016]
+    comp = [(c, x) for c, x in comp if x]
+
+    mmix = sum(x * EX2016_M[c] for c, x in comp)
+    suma = 0.0
+    for c, x in comp:
+        suma += x * EX2016_S[c][col_s]
+    z = 1.0 - (p_ref_kpa / 101.325) * suma * suma
+    p_pa = p_ref_kpa * 1000.0
+    vm_real = R_GAS_2016 * t / p_pa * z
+    densidad = (mmix / 1000.0) / vm_real
+    zaire = 1.0 - (p_ref_kpa / PRESION_REF_AIRE_KPA) * BAIR_TABLA[idx_aire]
+    dens_rel = (mmix / M_AIRE) * (zaire / z)
+    hs_mol = sum(x * EX2016_HS[c][col_hs] for c, x in comp)
+    lat = L_AGUA_ISO6976_2016[t_comb]
+    hi_mol = hs_mol - sum(x * ATOMOS_H_EX2016[c] / 2.0 * lat for c, x in comp)
+    hs_vol = (hs_mol / vm_real) / 1000.0
+    hi_vol = (hi_mol / vm_real) / 1000.0
+    avisos = []
+    if not (90.0 <= p_ref_kpa <= 110.0):
+        avisos.append("Presion de referencia fuera de 90..110 kPa (fuera de rango, se calcula igual).")
+    if z <= 0.9:
+        avisos.append("Z <= 0.9 (fuera de rango, se calcula igual).")
+    return {
+        "Molar Mass (g/mol)": mmix,
+        "Compressibility (Z)": z,
+        "Density (kg/m3)": densidad,
+        "Relative Density": dens_rel,
+        "Sup. Calorific Val. (MJ/m3)": hs_vol,
+        "Sup. Calorific Val. (MJ/kg)": hs_mol / mmix,
+        "Sup. Calorific Val. (kJ/mol)": hs_mol,
+        "Inf. Calorific Val. (MJ/m3)": hi_vol,
+        "Inf. Calorific Val. (MJ/kg)": hi_mol / mmix,
+        "Inf. Calorific Val. (kJ/mol)": hi_mol,
+        "Indice de Wobbe (MJ/m3)": hs_vol / (dens_rel ** 0.5),
+        "avisos": avisos,
+    }
+
+
 def _autotest_caso_real_reindexado():
     """[NO ES UN CASO REAL DE LA VARIANTE "EX" -- ver docstring seccion 4]
 
