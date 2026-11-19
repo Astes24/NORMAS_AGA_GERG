@@ -101,6 +101,15 @@ precision de maquina)**, incluyendo el flag de rango en los 400 casos.
 NUCLEO REAL DE `RD60` (`FUN_1800fcab8`) -- [CERTAIN] para presion !=~0psig,
 pendiente honesto documentado para presion ~0psig
 ===============================================================================
+[C-40, 2026-11-17] CERRADO el pendiente de abajo: la Tabla 1 (`FUN_1800fc8e4`
++ `FUN_1800fccec`) se porto a Python puro desde el desensamblado (capstone) y
+los datos a bytes (`normas/_astm_d1550_tabla1.py`); validada bit a bit contra
+el binario en 546640 puntos (0 diferencias). Ahora: P<0 -> 0, |P|<0.01 psig
+usa la rama directa y la iteracion se siembra con la Tabla 1. Barrido de
+20000 casos contra `FUN_1800fcab8` (P -10..2500 psig, incluye P~0): 0
+diferencias en status, RD60/CTL/CPL (bit a bit) y flags ASTM/MPMS. Lo que
+sigue sobre "semilla RD_obs" y "pendiente honesto" queda como historia.
+
 El nucleo real bifurca en 2 ramas segun `abs(pressure_psig) >= 0.01`
 (`DAT_180193e68`):
 
@@ -246,7 +255,10 @@ verificados exit 0 antes y despues de esta ronda, mismos resultados.
 """
 from __future__ import annotations
 
+import math
+
 from normas._astm_d1550_ctl_table import ASTM_D1550_CTL_TABLE
+from normas._astm_d1550_tabla1 import ASTM_D1550_TABLA1
 from normas.API_MPMS_Tables_1980_2004 import api_mpms_11_2_2
 
 # Dominio real de la Tabla 2 (Ctl), confirmado a bytes (DAT_18028c6e8/6f0,
@@ -313,6 +325,78 @@ def _ctl_core(rd60: float, t_f: float) -> tuple[float, bool]:
     return ctl, oor
 
 
+# [C-40, 2026-11-17] Tabla 1 de D1550 (RD observada -> RD@60F), replica EXACTA del binario.
+# Constantes leidas a bytes: DAT_18028c6e0=0.575, DAT_18028c6f8=0.675 (dominio de RD observada).
+RD_OBS_TABLA1_MIN = 0.575
+RD_OBS_TABLA1_MAX = 0.675
+
+
+def _tabla1_fila(fila: tuple, t_f: float) -> tuple[float, bool]:
+    """[CERTAIN, C-40] Replica de `FUN_1800fccec` (desensamblado con capstone; la decompilacion de
+    Ghidra perdia argumentos): interpolacion lineal en T sobre una fila de la Tabla 1, extrapolando
+    con los 2 puntos extremos fuera de [t_min, t_max]. Devuelve (rd60, dentro_de_rango_de_la_fila)."""
+    _clave, t_min, t_max, valores = fila
+    e = int(t_f)  # cvttsd2si: truncamiento
+    if t_f > float(e):
+        e += 1
+    if e == t_min:
+        e += 1
+    lo, hi, dentro = 0, 1, False
+    n = t_max - t_min + 1
+    if t_min <= e - 1:
+        if t_max >= e:
+            dentro = True
+            hi = e - t_min
+            lo = e - 1 - t_min
+        else:
+            lo, hi = n - 2, n - 1
+    y_lo = valores[lo] / _SCALE
+    x_lo = float(lo + t_min)
+    x_hi = float(hi + t_min)
+    return (valores[hi] / _SCALE - y_lo) * (t_f - x_lo) / (x_hi - x_lo) + y_lo, dentro
+
+
+def _redondear_3dec(x: float) -> float:
+    """`FUN_1800e1db4(x, 3)`: redondeo half-away-from-zero a 3 decimales."""
+    if 0.0 <= x:
+        return math.floor(1000.0 * x + 0.5) * 0.001
+    return math.ceil(1000.0 * x - 0.5) * 0.001
+
+
+def _tabla1_core(t_f: float, rd_obs: float) -> tuple[float, bool]:
+    """[CERTAIN, C-40] Replica EXACTA de `FUN_1800fc8e4`: RD@60F a partir de la RD OBSERVADA y T
+    segun la Tabla 1 de D1550. Interpola en T dentro de 2 filas vecinas (claves RD_obs x1000) y luego
+    linealmente en RD_obs; recorta el resultado a [0.621, 0.634]. Devuelve (rd60, fuera_de_rango).
+    Validado bit a bit contra el nucleo real via ctypes (ver docstring del modulo)."""
+    x = rd_obs * _SCALE
+    tabla = ASTM_D1550_TABLA1
+    k = 1
+    while k < 19:
+        if float(tabla[k][0]) >= x:
+            break
+        k += 1
+    if k >= 19:
+        f_lo, f_hi = tabla[17], tabla[18]
+    elif k < 18 and float(tabla[k - 1][1]) > t_f and _redondear_3dec(x) >= float(tabla[k][0]):
+        f_lo, f_hi = tabla[k], tabla[k + 1]
+    else:
+        f_lo, f_hi = tabla[k - 1], tabla[k]
+    v_lo, ok_lo = _tabla1_fila(f_lo, t_f)
+    v_hi, ok_hi = _tabla1_fila(f_hi, t_f)
+    oor = (not ok_lo) or (not ok_hi)
+    d_lo = f_lo[0] / _SCALE
+    rd60 = (v_hi - v_lo) * (rd_obs - d_lo) / (f_hi[0] / _SCALE - d_lo) + v_lo
+    if RD_OBS_TABLA1_MIN > rd_obs or rd_obs > RD_OBS_TABLA1_MAX:
+        oor = True
+    if RD60_TABLE_MIN > rd60:
+        oor = True
+        rd60 = RD60_TABLE_MIN
+    if rd60 > RD60_TABLE_MAX:
+        oor = True
+        rd60 = RD60_TABLE_MAX
+    return rd60, oor
+
+
 def astm_d1550_ctl(rd60: float, t_f: float) -> dict:
     """API publica de la pantalla real "ASTM D1550 CTL" (interpolacion
     PURA sobre la Tabla 2 de ASTM D1550, Butadieno). [CERTAIN, ver
@@ -349,14 +433,32 @@ def astm_d1550_rd60(rd_obs: float, t_f: float, pressure_psig: float,
     "astm_oor" (bool, "ASTM Range Status": RD60/T fuera del dominio de la
     Tabla 1/2 de D1550), "mpms_oor" (bool, "MPMS Range Status": el sub-paso
     de 11.2.2 marco fuera de rango)."""
+    # [C-40, 2026-11-17] Igual que `FUN_1800fcab8`: presion negativa -> 0; si |P| < 0.01 psig rama
+    # DIRECTA por Tabla 1 (sin iterar); si no, iteracion SEMBRADA con la Tabla 1 (antes: semilla
+    # RD_obs y sin rama directa -> 2002/2002 casos con P<0.01 y 50/4000 con P>=0.01 distintos de FX).
+    if pressure_psig < 0.0:
+        pressure_psig = 0.0
+    if not (_PRESSURE_BRANCH_THRESHOLD_PSIG <= abs(pressure_psig)):
+        rd60, astm_oor = _tabla1_core(t_f, rd_obs)
+        ctl, _ctl_oor = _ctl_core(rd60, t_f)  # flag descartado, como en FX
+        r112 = api_mpms_11_2_2(rd60, t_f, pressure_psig,
+                                equilibrium_pressure_psig=0.0,
+                                rounding=api_rounding)
+        return {
+            "status": 0, "rd60": rd60, "compressibility": r112["f"], "ctl": ctl,
+            "cpl": r112["cpl"], "astm_oor": astm_oor,
+            "mpms_oor": r112["fuera_de_rango_oficial"],
+        }
+
     tol = _TOL_ROUNDING if api_rounding else _TOL_NO_ROUNDING
-    guess = rd_obs
+    guess, _seed_oor = _tabla1_core(t_f, rd_obs)  # flag de la semilla descartado, como en FX
     ctl = 1.0
     f = 0.0
     cpl = 1.0
     mpms_oor = False
     converged = False
     for _ in range(_MAX_ITER):
+        # El flag de CTL fuera de rango/recortado se descarta tambien en FX (`FUN_1800fcab8`).
         ctl, _ctl_oor = _ctl_core(guess, t_f)
         r112 = api_mpms_11_2_2(guess, t_f, pressure_psig,
                                 equilibrium_pressure_psig=0.0,
@@ -373,15 +475,27 @@ def astm_d1550_rd60(rd_obs: float, t_f: float, pressure_psig: float,
         guess = new_guess
 
     if not converged:
+        # FX (rc=2 -> status 3) no escribe RD60/F/CTL/CPL; aqui se devuelven los ultimos valores
+        # por compatibilidad con la UI, que solo debe mostrar "No convergence".
         return {
             "status": 3, "rd60": guess, "compressibility": f, "ctl": ctl,
             "cpl": cpl, "astm_oor": False, "mpms_oor": mpms_oor,
         }
+    # Flag ASTM solo por el RD60 final (FX: `*rd60 <= 0.634 ? rd60 < 0.621 : 1`), [CERTAIN] fiel.
     astm_oor = not (RD60_TABLE_MIN <= guess <= RD60_TABLE_MAX)
     return {
         "status": 0, "rd60": guess, "compressibility": f, "ctl": ctl,
         "cpl": cpl, "astm_oor": astm_oor, "mpms_oor": mpms_oor,
     }
+
+
+# [C-35, 2026-11-16] F de SALIDA redondeado como la pantalla de FlowXpert (1/MPa, 6 decimales);
+# calculo interno intacto. Ver normas/_salida_pantalla_fx.py.
+import sys as _sys  # noqa: E402
+from normas import _salida_pantalla_fx as _sfx  # noqa: E402
+_sfx.aplicar(_sys.modules[__name__], {
+    "astm_d1550_rd60": {"compressibility": ("1/psi", "1/MPa")},
+})
 
 
 if __name__ == "__main__":

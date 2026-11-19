@@ -489,7 +489,12 @@ def calcular_gpa2172(composicion22: list[float], edicion: int, neo_pentano_modo:
     tabla_nombre, pbase, b_aire, x_agua_sat, _etq = ediciones[edicion]
     tabla = _T[tabla_nombre]
 
-    suma_total = sum(composicion22)
+    # [C-40, 2026-11-17] Suma SECUENCIAL en el orden de entrada, como `FUN_1800deb44`. El sum() de
+    # Python >=3.12 es compensado (Neumaier) y en la frontera exacta de +-0.01% daba status distinto
+    # al de FX (1109/20000 composiciones de frontera).
+    suma_total = 0.0
+    for _xi in composicion22:
+        suma_total += _xi
     if abs(suma_total - 1.0) >= TOLERANCIA_COMPOSICION:
         return ResultadoGPA2172(status=3, mensaje="Composicion no suma 100% +-0.01%")
 
